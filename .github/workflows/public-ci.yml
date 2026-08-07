@@ -45,6 +45,8 @@ jobs:
           cache: pip
       - name: Install locked test environment
         run: python -m pip install --require-hashes -r requirements-ci.lock
+      - name: Install encrypted-backup test dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
       - name: Run the public suite once
         run: >-
           python -m pytest -q
