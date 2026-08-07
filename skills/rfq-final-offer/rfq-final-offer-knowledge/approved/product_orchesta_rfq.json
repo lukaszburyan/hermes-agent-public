@@ -1,0 +1,15 @@
+{
+  "product_name": "Orchesta RFQ",
+  "client_name": "Orchesta",
+  "positioning": "System, który skraca pierwszy kontakt po zapytaniu o wycenę, porządkuje informacje i przygotowuje draft odpowiedzi dla handlowca.",
+  "customer_terms": [
+    "zapytania o wycenę",
+    "pierwsza odpowiedź",
+    "draft odpowiedzi",
+    "handlowiec",
+    "konto pocztowe",
+    "CRM"
+  ],
+  "first_product": true,
+  "no_new_sales_panel": true
+}

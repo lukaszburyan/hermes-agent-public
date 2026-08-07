@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule the canonical Hermes RFQ mailbox poller
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=5s
+Persistent=true
+Unit=hermes-rfq-mail-poller.service
+
+[Install]
+WantedBy=timers.target

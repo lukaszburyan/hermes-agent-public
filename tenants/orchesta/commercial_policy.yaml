@@ -1,0 +1,27 @@
+# Orchesta commercial exceptions. These rules are evaluated deterministically
+# before pricing or PDF generation and are never passed to the customer reply
+# writer.
+
+approved_currency: PLN
+
+manual_review:
+  discount:
+    patterns: ['\brabat\w*\b', '\bdiscount\b']
+  foreign_currency:
+    patterns: ['\bEUR\b', '\beuro\b', '€', '\bUSD\b', '\bdolar\w*\b', '\$']
+  large_or_custom_contract:
+    patterns: ['\bdu[żz]y kontrakt\b', '\bniestandardow\w* kontrakt\w*\b', '\benterprise\b']
+  custom_payment_terms:
+    patterns: ['\bniestandardow\w* termin\w* p[łl]atno[śs]ci\b', '\btermin p[łl]atno[śs]ci\b.{0,40}\b(?:30|45|60|90) dni\b']
+  custom_sla:
+    patterns: ['\bniestandardow\w* SLA\b', '\bindywidualn\w* SLA\b', '\bSLA\b.{0,40}\b(?:99[,.]9|24/7)\b']
+  custom_warranty:
+    patterns: ['\bniestandardow\w* gwarancj\w*\b', '\bwyd[łl]u[żz]\w* gwarancj\w*\b']
+  legal_terms:
+    patterns: ['\bwarunk\w* prawn\w*\b', '\bklauzul\w* umown\w*\b', '\bumow\w* ramow\w*\b']
+  changed_scope:
+    patterns: ['\bzmian\w* zatwierdzon\w* zakres\w*\b', '\bpoza zatwierdzon\w* zakres\w*\b']
+  barter:
+    patterns: ['\bbarter\w*\b']
+  installment_payment:
+    patterns: ['\bp[łl]atno[śs][ćc]\s+(?:w\s+)?(?:ratach|etapami)\b', '\brat\w*\b']

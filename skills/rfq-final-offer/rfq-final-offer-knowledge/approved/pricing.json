@@ -1,0 +1,38 @@
+{
+  "pricing_id": "orchesta-rfq-2026-07",
+  "currency": "PLN",
+  "display_currency": "zł",
+  "tax_mode": "net",
+  "base_offer": {
+    "name": "Orchesta RFQ, wdrożenie na 1 konto pocztowe",
+    "net_price": 7200,
+    "includes_mailboxes": 1
+  },
+  "additional_mailbox": {
+    "name": "Każde kolejne konto pocztowe",
+    "net_price": 3000
+  },
+  "crm_integration": {
+    "name": "Integracja z CRM",
+    "net_price": 3000,
+    "scope": "Podstawowe zapisanie zdarzenia jako leada w CRM."
+  },
+  "payment": {
+    "terms": "100% z góry"
+  },
+  "implementation": {
+    "days": 14,
+    "first_days_mode": "Przez pierwsze 14 dni system działa kontrolnie i przygotowuje drafty na skrzynce pocztowej."
+  },
+  "guarantee": {
+    "days": 14,
+    "refund": "cała kwota"
+  },
+  "roi_defaults": {
+    "monthly_inquiries_min": 20,
+    "monthly_inquiries_max": 30,
+    "minutes_per_response_min": 30,
+    "minutes_per_response_max": 120,
+    "hourly_cost_gross": 55
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "hermes-base-security-overrides",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "brace-expansion": "5.0.9",
+    "ip-address": "10.3.1",
+    "undici": "7.29.0"
+  }
+}

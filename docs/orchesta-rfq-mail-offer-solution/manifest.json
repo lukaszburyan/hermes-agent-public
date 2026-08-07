@@ -1,0 +1,34 @@
+{
+  "README.md": {
+    "bytes": 2092,
+    "lines": 36
+  },
+  "00-index.md": {
+    "bytes": 1998,
+    "lines": 42
+  },
+  "01-architektura-i-logika.md": {
+    "bytes": 11822,
+    "lines": 214
+  },
+  "02-mail-lead-pipeline-skill-i-prompty.md": {
+    "bytes": 46536,
+    "lines": 1289
+  },
+  "03-rfq-final-offer-skill-i-wiedza.md": {
+    "bytes": 42335,
+    "lines": 1389
+  },
+  "04-polaczenia-konfiguracja-i-sekrety.md": {
+    "bytes": 3326,
+    "lines": 119
+  },
+  "05-skrypty-cli-i-testy.md": {
+    "bytes": 102875,
+    "lines": 2928
+  },
+  "06-runbook-operacyjny.md": {
+    "bytes": 2090,
+    "lines": 45
+  }
+}

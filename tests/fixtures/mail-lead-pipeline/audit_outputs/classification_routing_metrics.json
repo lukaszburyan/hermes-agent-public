@@ -1,0 +1,169 @@
+{
+  "metrics": {
+    "total_cases": 144,
+    "classification_accuracy": 0.9791666666666666,
+    "by_class": {
+      "existing_client_request": {
+        "support": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "existing_thread_reply": {
+        "support": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "human_review_only": {
+        "support": 12,
+        "tp": 12,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.9230769230769231,
+        "recall": 1.0,
+        "f1": 0.9600000000000001
+      },
+      "new_general_business_inquiry": {
+        "support": 10,
+        "tp": 8,
+        "fp": 0,
+        "fn": 2,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "new_quote_request": {
+        "support": 27,
+        "tp": 27,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.9642857142857143,
+        "recall": 1.0,
+        "f1": 0.9818181818181818
+      },
+      "newsletter_automated_spam": {
+        "support": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "quote_draft_ready": {
+        "support": 12,
+        "tp": 12,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "related_non_rfq_topic": {
+        "support": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "same_domain_new_person": {
+        "support": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "unknown_review_needed": {
+        "support": 15,
+        "tp": 15,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.9375,
+        "recall": 1.0,
+        "f1": 0.967741935483871
+      },
+      "vendor_admin_billing": {
+        "support": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "weak_fit_review_only": {
+        "support": 10,
+        "tp": 9,
+        "fp": 0,
+        "fn": 1,
+        "precision": 1.0,
+        "recall": 0.9,
+        "f1": 0.9473684210526316
+      }
+    },
+    "rfq_opportunity_binary": {
+      "positive_classes": [
+        "existing_client_request",
+        "existing_thread_reply",
+        "new_quote_request",
+        "quote_draft_ready",
+        "same_domain_new_person"
+      ],
+      "tp": 67,
+      "fp": 1,
+      "fn": 0,
+      "tn": 76,
+      "precision": 0.9852941176470589,
+      "recall": 1.0
+    }
+  },
+  "classification_mismatches": [
+    {
+      "id": "C04_general_inbound",
+      "expected": "new_general_business_inquiry",
+      "got": "new_quote_request",
+      "body": "Mamy leady inbound i chcemy sprawdzić, czy da się to zautomatyzować.",
+      "subject": "Inbound"
+    },
+    {
+      "id": "C07_general_process",
+      "expected": "new_general_business_inquiry",
+      "got": "unknown_review_needed",
+      "body": "Potrzebujemy mapowania procesu obsługi klientów i możliwej automatyzacji.",
+      "subject": "Proces"
+    },
+    {
+      "id": "E07_weak_fit",
+      "expected": "weak_fit_review_only",
+      "got": "human_review_only",
+      "body": "Placówka medyczna: dane medyczne w załącznikach i odpowiedzi do pacjentów.",
+      "subject": "Automatyzacja wycen"
+    }
+  ],
+  "routing_mismatches": [
+    {
+      "id": "C07_general_process",
+      "class_expected": "new_general_business_inquiry",
+      "class_got": "unknown_review_needed",
+      "draft_expected": true,
+      "draft_got": false,
+      "kind_expected": "first_response",
+      "kind_got": "none",
+      "telegram_expected": false,
+      "telegram_got": true,
+      "wake_expected": true,
+      "wake_got": true
+    }
+  ]
+}

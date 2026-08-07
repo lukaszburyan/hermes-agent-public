@@ -1,0 +1,47 @@
+name: hermes-agent
+
+services:
+  hermes-agent:
+    image: ${HERMES_RELEASE_IMAGE:-ghcr.io/lukaszburyan/hermes-agent-public}@${HERMES_RELEASE_DIGEST:?set HERMES_RELEASE_DIGEST to the tested sha256 digest}
+    restart: unless-stopped
+    init: true
+    ports:
+      - 127.0.0.1:32768:4860
+    labels:
+      - traefik.enable=false
+    env_file:
+      - ${HERMES_RUNTIME_ENV_FILE:-.env.example}
+    environment:
+      HERMES_RELEASE_DIGEST: ${HERMES_RELEASE_DIGEST}
+      HERMES_EXPECTED_SKILL_ROOT: /opt/hermes-release/app/skills
+      HERMES_TRANSPORT_KILL_SWITCH: ${HERMES_TRANSPORT_KILL_SWITCH:-1}
+      HERMES_OPERATIONAL_AUTOSEND_ENABLED: ${HERMES_OPERATIONAL_AUTOSEND_ENABLED:-0}
+      HERMES_TEST_MODE: ${HERMES_TEST_MODE:-0}
+      HERMES_TEST_RECIPIENT_ALLOWLIST: ${HERMES_TEST_RECIPIENT_ALLOWLIST:-}
+      HERMES_RFQ_MARKER_ENABLED: "0"
+      OPENAI_API_KEY: ""
+      ORCHESTA_RFQ_ALLOW_EXTERNAL_VISION: "0"
+      ORCHESTA_RFQ_ALLOW_SCHEMA_MODEL: "0"
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    tmpfs:
+      - /opt/data:rw,nosuid,size=256m
+    volumes:
+      - ${HERMES_RUNTIME_ENV_FILE}:/opt/data/.env:ro
+      - ${HERMES_RUNTIME_DIR:-./runtime}/config.yaml:/opt/data/config.yaml:ro
+      - ${HERMES_RUNTIME_DIR:-./runtime}/auth.json:/opt/data/auth.json
+      - ${HERMES_RUNTIME_DIR:-./runtime}/google_client_secret.json:/opt/data/google_client_secret.json:ro
+      - ${HERMES_RUNTIME_DIR:-./runtime}/google_token.json:/opt/data/google_token.json
+      - ${HERMES_RUNTIME_DIR:-./runtime}/cron:/opt/data/cron
+      - ${HERMES_RUNTIME_DIR:-./runtime}/state:/opt/data/rfq-state
+      - ${HERMES_RUNTIME_DIR:-./runtime}/tmp:/opt/data/.tmp
+      - ${HERMES_RUNTIME_DIR:-./runtime}/logs:/opt/data/logs
+      - ${HERMES_RUNTIME_DIR:-./runtime}/reports:/opt/data/reports
+      - ${HERMES_RUNTIME_DIR:-./runtime}/backups:/opt/data/backups
+      - ${HERMES_RUNTIME_DIR:-./runtime}/sessions:/opt/data/sessions
+      - ${HERMES_RUNTIME_DIR:-./runtime}/crm:/opt/data/CRM
+      - ${HERMES_RUNTIME_DIR:-./runtime}/rfq-runtime:/opt/data/rfq-runtime
+      - /root/HermesVault:/root/HermesVault
+      - /root/HermesVault:/HermesVault
+      - ${HERMES_RCLONE_CONFIG_FILE:-./runtime/rclone.conf}:/run/secrets/rclone.conf:ro
+    security_opt:
+      - no-new-privileges:true

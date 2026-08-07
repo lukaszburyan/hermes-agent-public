@@ -1,0 +1,24 @@
+# Orchesta company identity (spec section 2: company data lives in the tenant
+# package, never in the Hermes core).
+#
+# Consumed by: reply writer (signature/footer), offer template (seller block),
+# registry (account identity). The core never hardcodes "Orchesta".
+
+company:
+  name: Orchesta
+  website: https://orchesta.pl
+  mailbox: rfq-mailbox@example.invalid
+  language: pl
+
+seller:
+  first_name: Orchesta
+  last_name: RFQ Team
+  full_name: Orchesta RFQ Team
+  phone: "+48 000 000 000"
+  linkedin: https://example.invalid/orchesta-rfq
+
+# Footer used in customer-facing replies and the PDF offer.
+footer: |-
+  Orchesta RFQ Team
+
+  Kontakt przez skrzynkę firmową

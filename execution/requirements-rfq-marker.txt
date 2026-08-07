@@ -1,0 +1,4 @@
+# marker-pdf is intentionally not installed in production.
+# marker-pdf 2.0.0 and surya-ocr 0.22.1 still require Pillow <11, while the
+# supported Pillow line is >=12.3. PyMuPDF plus Tesseract is the fail-safe
+# scanned-PDF path until upstream supports a vulnerability-free Pillow release.

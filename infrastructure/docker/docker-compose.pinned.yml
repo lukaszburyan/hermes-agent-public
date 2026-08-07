@@ -1,0 +1,3 @@
+# Compatibility shim only. docker-compose.yml is the single canonical file.
+include:
+  - path: docker-compose.yml

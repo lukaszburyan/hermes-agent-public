@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OUTPUT_FILE="${1:?usage: vps-daily-host-audit.sh OUTPUT_FILE}"
+OUTPUT_DIR="$(dirname "$OUTPUT_FILE")"
+DATA_DIR="${HERMES_RUNTIME_DIR:-$(dirname "$OUTPUT_DIR")}"
+mkdir -p "$OUTPUT_DIR"
+TMP_FILE="$(mktemp "$OUTPUT_DIR/.vps-daily-audit.XXXXXX")"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+warnings=()
+warn() {
+  warnings+=("$1")
+}
+
+report_time="$(TZ=Europe/Warsaw date '+%F %H:%M %Z')"
+host_name="$(hostname)"
+uptime_short="$(uptime -p 2>/dev/null || true)"
+load_1m="$(awk '{print $1}' /proc/loadavg)"
+disk_used="$(df -P / | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
+memory_used="$(free | awk '/^Mem:/ {printf "%.0f", ($2-$7)*100/$2}')"
+data_size="$(du -sh "$DATA_DIR" 2>/dev/null | awk '{print $1}' || echo unavailable)"
+
+ufw_state="$(ufw status 2>/dev/null | awk 'NR==1 {print $2}' || true)"
+allowed_tcp="$(ufw status 2>/dev/null | awk '$1 ~ /^[0-9]+\/tcp$/ && $2 == "ALLOW" {print $1}' | sort -u | paste -sd, -)"
+if [[ "$ufw_state" != "active" ]]; then
+  warn "Firewall UFW nie jest aktywny."
+elif [[ "$allowed_tcp" != "22/tcp,443/tcp,80/tcp" ]]; then
+  warn "Reguly UFW roznia sie od oczekiwanych 22/80/443: ${allowed_tcp:-brak}."
+fi
+
+sshd_config="$(sshd -T 2>/dev/null || true)"
+permit_root="$(awk '$1 == "permitrootlogin" {print $2}' <<<"$sshd_config")"
+password_auth="$(awk '$1 == "passwordauthentication" {print $2}' <<<"$sshd_config")"
+kbd_auth="$(awk '$1 == "kbdinteractiveauthentication" {print $2}' <<<"$sshd_config")"
+pubkey_auth="$(awk '$1 == "pubkeyauthentication" {print $2}' <<<"$sshd_config")"
+if [[ "$permit_root" != "no" || "$password_auth" != "no" || "$kbd_auth" != "no" || "$pubkey_auth" != "yes" ]]; then
+  warn "Konfiguracja SSH nie jest key-only albo dopuszcza root."
+fi
+
+public_listeners="$(ss -H -lnt 2>/dev/null | awk '$4 !~ /^127\./ && $4 !~ /^\[::1\]:/ {value=$4; sub(/^.*:/, "", value); print value}' | sort -nu | paste -sd, -)"
+
+docker_state="$(systemctl is-active docker 2>/dev/null || true)"
+container_total="$(docker ps -a --format '{{.Names}}' 2>/dev/null | awk 'NF {n++} END {print n+0}')"
+container_running="$(docker ps --format '{{.Names}}' 2>/dev/null | awk 'NF {n++} END {print n+0}')"
+if [[ "$docker_state" != "active" || "$container_running" -ne "$container_total" ]]; then
+  warn "Docker lub co najmniej jeden kontener nie dziala."
+fi
+
+gateway_state="$(systemctl is-active hermes-gateway 2>/dev/null || true)"
+monarx_state="$(systemctl is-active monarx-agent 2>/dev/null || true)"
+[[ "$gateway_state" == "active" ]] || warn "Hermes Telegram gateway nie dziala."
+[[ "$monarx_state" == "active" ]] || warn "Skaner Monarx nie dziala."
+
+failed_units="$(systemctl --failed --plain --no-legend 2>/dev/null | awk 'NF {n++} END {print n+0}')"
+[[ "$failed_units" -eq 0 ]] || warn "Systemd raportuje ${failed_units} uszkodzone uslugi."
+
+pending_regular="$(apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"
+esm_line="$(pro security-status --esm-apps 2>/dev/null | grep -Eo 'There (is|are) [0-9]+ pending security update(s)?' | head -1 || true)"
+pending_esm="$(grep -Eo '[0-9]+' <<<"$esm_line" | head -1 || true)"
+pending_esm="${pending_esm:-0}"
+reboot_required=no
+[[ -f /var/run/reboot-required ]] && reboot_required=yes
+[[ "$pending_regular" -eq 0 ]] || warn "Czeka ${pending_regular} zwyklych aktualizacji pakietow."
+[[ "$pending_esm" -eq 0 ]] || warn "Czeka ${pending_esm} aktualizacja bezpieczenstwa z kanalu Ubuntu ESM."
+[[ "$reboot_required" == "no" ]] || warn "Serwer wymaga restartu po aktualizacji."
+
+failed_logins="$(journalctl -u ssh --since '24 hours ago' --no-pager 2>/dev/null | awk '/Failed password|Invalid user|authentication failure/ {n++} END {print n+0}')"
+accepted_keys="$(journalctl -u ssh --since '24 hours ago' --no-pager 2>/dev/null | awk '/Accepted publickey/ {n++} END {print n+0}')"
+
+if (( disk_used >= 80 )); then
+  warn "Dysk systemowy jest zajety w ${disk_used}%."
+fi
+if (( memory_used >= 90 )); then
+  warn "Pamiec RAM jest zajeta w ${memory_used}%."
+fi
+
+overall=OK
+if (( ${#warnings[@]} > 0 )); then
+  overall=UWAGA
+fi
+
+{
+  echo "Hermes VPS - raport dzienny"
+  echo "Czas: $report_time"
+  echo "Status: $overall"
+  echo
+  echo "Serwer: $host_name, $uptime_short, load 1 min: $load_1m"
+  echo "Zasoby: dysk ${disk_used}%, RAM ${memory_used}%, dane Hermesa $data_size"
+  echo "SSH: root=$permit_root, haslo=$password_auth, klucz=$pubkey_auth; odrzucone proby 24h: $failed_logins, poprawne klucze: $accepted_keys"
+  echo "Firewall: UFW=$ufw_state, dozwolone TCP=${allowed_tcp:-brak}; porty nasluchujace na interfejsach: ${public_listeners:-brak}"
+  echo "Uslugi: Docker=$docker_state (${container_running}/${container_total} kontenerow), gateway=$gateway_state, Monarx=$monarx_state, bledne uslugi=$failed_units"
+  echo "Aktualizacje: zwykle=$pending_regular, ESM security=$pending_esm, restart wymagany=$reboot_required"
+  if (( ${#warnings[@]} > 0 )); then
+    echo
+    echo "Co wymaga uwagi:"
+    printf -- '- %s\n' "${warnings[@]}"
+  else
+    echo
+    echo "Wszystko dziala prawidlowo. Nie wykryto pilnej czynnosci."
+  fi
+} >"$TMP_FILE"
+
+chmod 0644 "$TMP_FILE"
+mv -f "$TMP_FILE" "$OUTPUT_FILE"
+trap - EXIT

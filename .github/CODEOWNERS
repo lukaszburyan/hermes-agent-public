@@ -1,0 +1,4 @@
+# GitHub Free cannot enforce approval on a private personal repository, but
+# every pull request is still routed to the sole accountable owner.
+* @lukaszburyan
+

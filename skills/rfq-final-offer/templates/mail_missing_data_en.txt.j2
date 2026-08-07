@@ -1,0 +1,10 @@
+{{ salutation }}
+
+to prepare a short offer, I need to clarify {{ questions|length }} thing{% if questions|length != 1 %}s{% endif %}:
+
+{% for question in questions -%}
+{{ loop.index }}. {{ question }}
+{% endfor %}
+After your reply, I will prepare the offer.
+
+{{ footer }}

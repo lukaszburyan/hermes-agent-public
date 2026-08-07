@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hermes/schemas/incoming_mail_reply.schema.json",
+  "title": "IncomingMailReply",
+  "description": "LLM output for reply authoring (spec section 12). The LLM writes the reply text only; it never changes the approved action.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subject", "body", "needs_human_review"],
+  "properties": {
+    "subject": {
+      "type": "string",
+      "description": "Reply subject, typically 'Re: <original subject>'."
+    },
+    "body": {
+      "type": "string",
+      "description": "Plain-text reply body in the customer's language."
+    },
+    "needs_human_review": {
+      "type": "boolean",
+      "description": "True when the LLM could not safely produce a final reply and a human should review."
+    },
+    "review_reason": {
+      "type": ["string", "null"],
+      "description": "Short reason when needs_human_review is true; null otherwise."
+    }
+  }
+}

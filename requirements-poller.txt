@@ -1,0 +1,8 @@
+# Minimal deps for the rebuilt Hermes sheets poller + LLM modules (Guardrail 4:
+# no token-billed OpenAI API). Install on the VPS venv used by the cron poller.
+google-api-python-client>=2,<3
+google-auth>=2,<3
+google-auth-oauthlib>=1,<2
+jsonschema>=4,<5
+pyyaml>=6,<7
+requests>=2.31,<3

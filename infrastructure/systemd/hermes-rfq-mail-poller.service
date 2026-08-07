@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermes RFQ canonical mailbox poller
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStart=/usr/bin/docker exec ${HERMES_CONTAINER_NAME} /opt/data/scripts/orchesta-rfq-mail-poller.sh
+TimeoutStartSec=150
+Nice=10

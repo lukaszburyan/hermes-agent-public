@@ -1,0 +1,30 @@
+# Orchesta conversation rules (spec section 2: sales conversation rules live in
+# the tenant package).
+#
+# Consumed by: LLM reply writer (system prompt), conversation-continuity
+# logic (F8). Defines tone, greeting, and first-reply behaviour.
+
+language: pl
+tone: professional_direct
+style:
+  human_to_human: true
+  short_paragraphs: true
+  no_marketing_tone: true
+  no_technical_explanations: true
+  concrete_next_step: true
+  do_not_repeat_customer_data: true
+  do_not_repeat_previous_requests: true
+# Use the customer's first name in the vocative case once known.
+use_salutation: true
+# First agent reply in a thread must greet and ask discovery questions.
+first_reply:
+  greet: true
+  ask_discovery_questions: true
+  avoid_prices: true
+# Subsequent replies continue the thread (no re-greeting).
+follow_up:
+  greet: false
+  reference_previous: true
+  thank_again: false
+# Maximum questions per reply (keeps replies natural).
+max_questions_per_reply: 2

@@ -1,0 +1,15 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.tmp
+**/__pycache__
+**/*.pyc
+logs
+reports
+rfq-runtime
+tests/**
+!tests/fixtures/
+!tests/fixtures/mail-lead-pipeline/
+!tests/fixtures/mail-lead-pipeline/zoho_poll_sample.json

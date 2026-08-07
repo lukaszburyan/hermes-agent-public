@@ -1,0 +1,12 @@
+# Firma ABC discovery question texts (spec section 2).
+
+questions:
+  company_name_or_website:
+    pl: "Na jaką firmę mam przygotować ofertę?"
+    en: "Which company should I prepare the offer for?"
+  current_process:
+    pl: "Jak obecnie wygląda u Państwa proces obsługi zapytań?"
+    en: "What does your current inquiry-handling process look like?"
+  monthly_volume:
+    pl: "Ile zapytań przyjmujecie Państwo miesięcznie?"
+    en: "How many inquiries do you receive per month?"

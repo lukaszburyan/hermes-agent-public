@@ -1,0 +1,11 @@
+[Unit]
+Description=Create and verify an encrypted off-site Hermes RFQ state backup
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStart=/usr/bin/docker exec ${HERMES_CONTAINER_NAME} /opt/data/scripts/hermes-state-backup.sh
+TimeoutStartSec=1800
+Nice=15

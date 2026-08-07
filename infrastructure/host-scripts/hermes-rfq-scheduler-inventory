@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Atomically record the live scheduler configuration for the release monitor."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+SOURCES = {
+    "mailbox": {
+        "timer": "hermes-rfq-mail-poller.timer",
+        "service": "hermes-rfq-mail-poller.service",
+        "entrypoint": "/opt/data/scripts/orchesta-rfq-mail-poller.sh",
+        "lock": "/opt/data/.tmp/hermes-rfq-mail-poller.lock",
+    },
+    "google_sheets": {
+        "timer": "hermes-rfq-google-sheets-poller.timer",
+        "service": "hermes-rfq-google-sheets-poller.service",
+        "entrypoint": "/opt/data/scripts/google-sheets-lead-poller.sh",
+        "lock": "/opt/data/.tmp/google-sheets-lead-poller.lock",
+    },
+}
+ALLOWED_AUXILIARY_TIMERS = {
+    "hermes-rfq-release-monitor.timer",
+    "hermes-rfq-state-backup.timer",
+    "hermes-vps-daily-audit.timer",
+}
+
+
+def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, text=True, capture_output=True, check=False)
+
+
+def cron_text() -> str:
+    chunks = [run(["crontab", "-l"]).stdout]
+    for path in [Path("/etc/crontab"), *sorted(Path("/etc/cron.d").glob("*"))]:
+        try:
+            if path.is_file():
+                chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    spool = Path("/var/spool/cron/crontabs")
+    if spool.is_dir():
+        for path in sorted(spool.glob("*")):
+            try:
+                if path.is_file():
+                    chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+    return "\n".join(chunks)
+
+
+def internal_scheduler_hits(runtime_root: Path) -> list[str]:
+    path = runtime_root / "cron" / "jobs.json"
+    if not path.is_file():
+        return []
+    try:
+        jobs = json.loads(path.read_text(encoding="utf-8")).get("jobs", [])
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ["internal:jobs_json_invalid"]
+    poller_scripts = {
+        "orchesta-rfq-mail-poller.sh",
+        "google-sheets-lead-poller.sh",
+    }
+    return sorted(
+        f"internal:{job.get('id', 'unknown')}:{job.get('script', '')}"
+        for job in jobs
+        if isinstance(job, dict)
+        and job.get("enabled") is True
+        and job.get("script") in poller_scripts
+    )
+
+
+def release_container_snapshot() -> dict:
+    container = os.environ.get("HERMES_CONTAINER_NAME", "").strip()
+    image = os.environ.get("HERMES_RELEASE_IMAGE", "").strip()
+    digest = os.environ.get("HERMES_RELEASE_DIGEST", "").strip()
+    expected = f"{image}@{digest}" if image and digest else ""
+    if not container:
+        return {
+            "container_name": "",
+            "active_count": 0,
+            "running": False,
+            "expected_image": expected,
+            "config_image": "",
+            "image_id": "",
+            "exact_image_match": False,
+        }
+    count_result = run([
+        "docker",
+        "ps",
+        "--filter",
+        f"name=^{container}$",
+        "--format",
+        "{{.Names}}",
+    ])
+    active_names = [line for line in count_result.stdout.splitlines() if line.strip() == container]
+    inspect = run([
+        "docker",
+        "inspect",
+        container,
+        "--format",
+        "{{.State.Running}}|{{.Config.Image}}|{{.Image}}",
+    ])
+    fields = inspect.stdout.strip().split("|", 2) if inspect.returncode == 0 else []
+    running = len(fields) == 3 and fields[0].strip().lower() == "true"
+    config_image = fields[1].strip() if len(fields) == 3 else ""
+    image_id = fields[2].strip() if len(fields) == 3 else ""
+    return {
+        "container_name": container,
+        "active_count": len(active_names),
+        "running": running,
+        "expected_image": expected,
+        "config_image": config_image,
+        "image_id": image_id,
+        "exact_image_match": bool(expected) and config_image == expected,
+    }
+
+
+def collect(runtime_root: Path) -> dict:
+    result: dict = {"collected_at": datetime.now(timezone.utc).isoformat()}
+    expected_timers = {details["timer"] for details in SOURCES.values()}
+    process_text = run(["ps", "-eo", "args="]).stdout
+    for source, details in SOURCES.items():
+        timer = details["timer"]
+        service_text = run(["systemctl", "cat", details["service"]]).stdout
+        active = run(["systemctl", "is-active", timer]).stdout.strip() == "active"
+        enabled = run(["systemctl", "is-enabled", timer]).stdout.strip() == "enabled"
+        canonical = details["entrypoint"] in service_text
+        result[source] = {
+            "active_count": int(active and enabled),
+            "timer": timer,
+            "timer_active": active,
+            "timer_enabled": enabled,
+            "entrypoint": details["entrypoint"] if canonical else "",
+            "lock": details["lock"] if canonical else "",
+            "active_process_count": sum(
+                1 for line in process_text.splitlines() if details["entrypoint"] in line
+            ),
+        }
+
+    timer_units = run(
+        ["systemctl", "list-unit-files", "--type=timer", "--no-legend", "--no-pager"]
+    ).stdout.lower()
+    legacy_units = []
+    for line in timer_units.splitlines():
+        unit = line.split(maxsplit=1)[0] if line.split() else ""
+        if (
+            unit
+            and any(token in unit for token in ("hermes", "orchesta", "rfq"))
+            and unit not in expected_timers
+            and unit not in ALLOWED_AUXILIARY_TIMERS
+        ):
+            legacy_units.append(unit)
+
+    poller_tokens = (
+        "zoho_mail_poller.py",
+        "google_sheets_lead_poller.py",
+        "orchesta-rfq-mail-poller.sh",
+        "google-sheets-lead-poller.sh",
+    )
+    legacy_cron = []
+    for line in cron_text().splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and any(token in stripped for token in poller_tokens):
+            legacy_cron.append(stripped[:500])
+    result["legacy_scheduler_hits"] = sorted(
+        set(legacy_units + legacy_cron + internal_scheduler_hits(runtime_root))
+    )
+    result["release_container"] = release_container_snapshot()
+    return result
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: hermes-rfq-scheduler-inventory OUTPUT.json", file=sys.stderr)
+        return 64
+    output = Path(sys.argv[1])
+    runtime_root = Path(os.environ.get("HERMES_RUNTIME_DIR") or output.parent.parent)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.partial")
+    temporary.write_text(
+        json.dumps(collect(runtime_root), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.chmod(0o600)
+    os.replace(temporary, output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

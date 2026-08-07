@@ -1,0 +1,4 @@
+interface:
+  display_name: "RFQ Final Offer"
+  short_description: "Draft PDF offers for Orchesta RFQ"
+  default_prompt: "Use $rfq-final-offer to create a draft-only Orchesta offer PDF and threaded reply draft after RFQ data is complete."

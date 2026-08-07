@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermes VPS daily host audit
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStartPre=/usr/bin/install -d -m 0755 ${HERMES_RUNTIME_DIR}/reports
+ExecStart=/usr/local/sbin/hermes-vps-daily-host-audit ${HERMES_RUNTIME_DIR}/reports/vps-daily-latest.txt

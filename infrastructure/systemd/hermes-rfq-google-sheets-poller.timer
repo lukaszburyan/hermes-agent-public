@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule the canonical Hermes RFQ Google Sheets poller
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=5s
+Persistent=true
+Unit=hermes-rfq-google-sheets-poller.service
+
+[Install]
+WantedBy=timers.target

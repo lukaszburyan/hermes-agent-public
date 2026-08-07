@@ -1,0 +1,13 @@
+# Firma ABC conversation rules (spec section 2).
+
+language: pl
+tone: friendly_formal
+use_salutation: true
+first_reply:
+  greet: true
+  ask_discovery_questions: true
+  avoid_prices: true
+follow_up:
+  greet: false
+  reference_previous: true
+max_questions_per_reply: 2

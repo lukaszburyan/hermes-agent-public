@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>Oferta {{ offer.offer_number }} - {{ client.company }}</title>
+  <style>{{ css }}</style>
+</head>
+<body>
+  <section class="page cover">
+      <div class="page-index">Oferta {{ offer.offer_number }} · Wersja {{ offer.version }}</div>
+    <main class="cover-copy">
+      <p class="brand">{{ brand|default("ORCHESTA RFQ") }}</p>
+      <h1>Odpowiedź na zapytania o wycenę w czasie poniżej 5 minut</h1>
+      <p class="muted">Oferta dla: {{ client.full_name }}{% if client.company %}, {{ client.company }}{% endif %}</p>
+      <p class="muted">Data: {{ offer.date }}</p>
+      <div class="metric-grid">
+        <div>
+          <span>Czas reakcji</span>
+          <strong>&lt; 300 s</strong>
+        </div>
+        <div>
+          <span>Wdrożenie</span>
+          <strong>14 dni</strong>
+        </div>
+        <div>
+          <span>Start od</span>
+          <strong>7200 zł netto</strong>
+        </div>
+        <div>
+          <span>Akceptacja</span>
+          <strong>odpowiedź mailowa</strong>
+        </div>
+      </div>
+    </main>
+    <div class="triangle triangle-a"></div>
+    <div class="triangle triangle-b"></div>
+    <footer>{{ footer }}</footer>
+  </section>
+
+  <section class="page problem">
+    <div class="page-index">01 / Problem</div>
+    <main class="narrow">
+      <h2>Gdy pierwsza odpowiedź przychodzi za późno</h2>
+      <p class="lead">Klient wysyła zapytanie o wycenę. Handlowiec jest w terenie, na spotkaniu albo obsługuje inne sprawy. Pierwsza odpowiedź przychodzi za późno.</p>
+      <p>Ten sam klient często pyta kilka firm. Firma, która odpowie pierwsza i konkretnie, szybciej przejmuje rozmowę.</p>
+      <div class="stat">
+        <strong>5 minut zamiast 30 minut</strong>
+        <p>Kontakt po 5 minutach zamiast po 30 minutach daje 100 razy większą szansę dotarcia i 21 razy większą szansę kwalifikacji leada. Dane pochodzą z badania Lead Response Management na 15 000 leadów i 100 000 prób kontaktu.</p>
+      </div>
+      <div class="calc">
+        <h3>{{ roi.title }}</h3>
+        <p>{{ roi.description }}</p>
+        <p>{{ roi.hours_text }}</p>
+        <p>{{ roi.cost_text }}</p>
+      </div>
+    </main>
+    <div class="right-mark"></div>
+    <footer>{{ footer }}</footer>
+  </section>
+
+  <section class="page solution">
+    <div class="page-index">02 / Rozwiązanie</div>
+    <main>
+      <h2>System, który<br>przejmuje<br>pierwszy kontakt</h2>
+      <div class="columns">
+        <div>
+          <p>{{ brand_name|default("Orchesta") }} śledzi wskazane konto pocztowe.</p>
+          <p>Rozpoznaje zapytania o wycenę.</p>
+          <p>Czyta treść wiadomości i bezpieczne załączniki.</p>
+          <p>Przygotowuje pierwszą odpowiedź albo krótkie pytania.</p>
+        </div>
+        <div>
+          <p>Generuje draft odpowiedzi na skrzynce pocztowej.</p>
+          <p>Działa obok obecnych narzędzi.</p>
+          <p>Nie wymaga nowego panelu dla handlowców.</p>
+        </div>
+      </div>
+      <div class="foundation">
+        <h3>Hermes jako fundament</h3>
+        <p>Wdrożenie obejmuje też instalację środowiska Hermes. To baza pod kolejne automatyzacje firmy. Ten sam fundament da się później rozszerzyć o następne procesy, nie tylko obsługę zapytań o wycenę.</p>
+      </div>
+    </main>
+    <div class="triangle triangle-c"></div>
+    <footer>{{ footer }}</footer>
+  </section>
+
+  <section class="page investment">
+    <div class="page-index">03 / Inwestycja</div>
+    <main>
+      <h2>Zakres i następny krok</h2>
+      <div class="scope-summary">
+        <span>{{ scope.mailbox_count }} {{ scope.mailbox_label }}</span>
+        <span>CRM: {{ scope.crm_label }}</span>
+        <span>Źródło: {{ scope.inquiry_source_label }}</span>
+      </div>
+      <div class="price-list">
+        {% for item in pricing.line_items %}
+        <div class="price-row">
+          <span>{{ item.name }}</span>
+          <strong>{{ item.net_display }} netto</strong>
+        </div>
+        {% endfor %}
+        <div class="price-total">
+          <span>Razem</span>
+          <strong>{{ pricing.net_total_display }} netto</strong>
+        </div>
+      </div>
+      <div class="terms">
+        <p><strong>CRM:</strong> Integracja obejmuje podstawowe zapisanie zdarzenia jako leada w CRM.</p>
+        <p><strong>Płatność:</strong> 100% z góry.</p>
+        <p><strong>Wdrożenie:</strong> 14 dni.</p>
+        <p><strong>Tryb pierwszych 14 dni:</strong> system działa kontrolnie i przygotowuje drafty na skrzynce pocztowej, aby potwierdzić jakość odpowiedzi i dopasowanie logiki do firmy.</p>
+        <p><strong>Gwarancja:</strong> 14 dni. Jeśli system nie odpowiada klientowi, zwrot obejmuje całą kwotę.</p>
+        <p><strong>Kolejność dodatków:</strong> najpierw wdrażane jest jedno konto pocztowe i logika działania. Dodatkowe konta pocztowe oraz CRM są uzupełniane po potwierdzeniu, że pierwszy zakres działa zgodnie z oczekiwaniem.</p>
+      </div>
+      <div class="cta">Aby zaakceptować ofertę, wystarczy odpowiedzieć na tego maila: „Akceptuję ofertę”.</div>
+    </main>
+    <footer>{{ footer }}</footer>
+  </section>
+</body>
+</html>

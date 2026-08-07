@@ -1,0 +1,25 @@
+# Firma ABC internal notifications (spec section 5 example: a different firm
+# may use email alerts instead of Telegram). The reply-writer module never
+# receives this file.
+
+internal_notifications:
+  human_review:
+    email:
+      enabled: true
+      destination_env: HERMES_ALERT_EMAIL
+    telegram:
+      enabled: false
+
+  runtime_error:
+    email:
+      enabled: true
+      destination_env: HERMES_ALERT_EMAIL
+    telegram:
+      enabled: false
+
+  llm_error:
+    email:
+      enabled: true
+      destination_env: HERMES_ALERT_EMAIL
+    telegram:
+      enabled: false

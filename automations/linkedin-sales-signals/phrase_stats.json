@@ -1,0 +1,552 @@
+{
+  "updated_at": "2026-07-23T11:12:19.176318+00:00",
+  "history": [
+    {
+      "week": "2026-07-23",
+      "phrases": {
+        "automatyzacja sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja procesu sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja działu sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja pracy handlowca": {
+          "posts": 2,
+          "records_csv": 2
+        },
+        "automatyzacja pozyskiwania klientów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja prospectingu": {
+          "posts": 1,
+          "records_csv": 1
+        },
+        "automatyzacja lead generation": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja cold mailingu": {
+          "posts": 1,
+          "records_csv": 1
+        },
+        "automatyzacja mailingu sprzedażowego": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja zimnych telefonów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja follow up": {
+          "posts": 4,
+          "records_csv": 4
+        },
+        "automatyzacja obsługi leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja kwalifikacji leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja bazy kontaktów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja raportowania sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyzacja CRM": {
+          "posts": 31,
+          "records_csv": 31
+        },
+        "CRM nie działa": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "problem z CRM": {
+          "posts": 26,
+          "records_csv": 14
+        },
+        "szukam systemu CRM": {
+          "posts": 2,
+          "records_csv": 2
+        },
+        "polecicie CRM": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "wdrożenie CRM": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "zmiana CRM": {
+          "posts": 11,
+          "records_csv": 11
+        },
+        "porządkowanie CRM": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "dane w CRM": {
+          "posts": 33,
+          "records_csv": 33
+        },
+        "baza klientów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "baza kontaktów B2B": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "aktualna baza kontaktów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "lista kontaktów sprzedażowych": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "lista potencjalnych klientów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "baza numerów telefonów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "numery telefonów do firm": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "dane kontaktowe firm": {
+          "posts": 4,
+          "records_csv": 0
+        },
+        "pozyskiwanie danych kontaktowych": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "wzbogacanie danych kontaktowych": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "generowanie leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "pozyskiwanie leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "brak leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "mało leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "szukam klientów B2B": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "jak pozyskiwać klientów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "pozyskiwanie klientów B2B": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "prospecting B2B": {
+          "posts": 1,
+          "records_csv": 0
+        },
+        "proces prospectingu": {
+          "posts": 2,
+          "records_csv": 1
+        },
+        "outbound sales": {
+          "posts": 1,
+          "records_csv": 0
+        },
+        "sprzedaż wychodząca": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "cold calling": {
+          "posts": 3,
+          "records_csv": 0
+        },
+        "zimne telefony": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "skrypt cold calling": {
+          "posts": 1,
+          "records_csv": 0
+        },
+        "cold mailing": {
+          "posts": 20,
+          "records_csv": 1
+        },
+        "zimny mailing": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "kampania cold email": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "mailing nie działa": {
+          "posts": 1,
+          "records_csv": 0
+        },
+        "niska skuteczność mailingu": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "brak odpowiedzi na maile": {
+          "posts": 1,
+          "records_csv": 1
+        },
+        "follow up sprzedażowy": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "automatyczne follow up": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "kwalifikacja leadów": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "proces sprzedażowy": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "ręczna praca w sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        },
+        "agent AI dla sprzedaży": {
+          "posts": 0,
+          "records_csv": 0
+        }
+      }
+    }
+  ],
+  "summary": {
+    "automatyzacja sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja procesu sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja działu sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja pracy handlowca": {
+      "last_posts": 2,
+      "last_records_csv": 2,
+      "zero_csv_streak": 0
+    },
+    "automatyzacja pozyskiwania klientów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja prospectingu": {
+      "last_posts": 1,
+      "last_records_csv": 1,
+      "zero_csv_streak": 0
+    },
+    "automatyzacja lead generation": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja cold mailingu": {
+      "last_posts": 1,
+      "last_records_csv": 1,
+      "zero_csv_streak": 0
+    },
+    "automatyzacja mailingu sprzedażowego": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja zimnych telefonów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja follow up": {
+      "last_posts": 4,
+      "last_records_csv": 4,
+      "zero_csv_streak": 0
+    },
+    "automatyzacja obsługi leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja kwalifikacji leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja bazy kontaktów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja raportowania sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyzacja CRM": {
+      "last_posts": 31,
+      "last_records_csv": 31,
+      "zero_csv_streak": 0
+    },
+    "CRM nie działa": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "problem z CRM": {
+      "last_posts": 26,
+      "last_records_csv": 14,
+      "zero_csv_streak": 0
+    },
+    "szukam systemu CRM": {
+      "last_posts": 2,
+      "last_records_csv": 2,
+      "zero_csv_streak": 0
+    },
+    "polecicie CRM": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "wdrożenie CRM": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "zmiana CRM": {
+      "last_posts": 11,
+      "last_records_csv": 11,
+      "zero_csv_streak": 0
+    },
+    "porządkowanie CRM": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "dane w CRM": {
+      "last_posts": 33,
+      "last_records_csv": 33,
+      "zero_csv_streak": 0
+    },
+    "baza klientów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "baza kontaktów B2B": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "aktualna baza kontaktów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "lista kontaktów sprzedażowych": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "lista potencjalnych klientów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "baza numerów telefonów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "numery telefonów do firm": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "dane kontaktowe firm": {
+      "last_posts": 4,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "pozyskiwanie danych kontaktowych": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "wzbogacanie danych kontaktowych": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "generowanie leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "pozyskiwanie leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "brak leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "mało leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "szukam klientów B2B": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "jak pozyskiwać klientów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "pozyskiwanie klientów B2B": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "prospecting B2B": {
+      "last_posts": 1,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "proces prospectingu": {
+      "last_posts": 2,
+      "last_records_csv": 1,
+      "zero_csv_streak": 0
+    },
+    "outbound sales": {
+      "last_posts": 1,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "sprzedaż wychodząca": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "cold calling": {
+      "last_posts": 3,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "zimne telefony": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "skrypt cold calling": {
+      "last_posts": 1,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "cold mailing": {
+      "last_posts": 20,
+      "last_records_csv": 1,
+      "zero_csv_streak": 0
+    },
+    "zimny mailing": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "kampania cold email": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "mailing nie działa": {
+      "last_posts": 1,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "niska skuteczność mailingu": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "brak odpowiedzi na maile": {
+      "last_posts": 1,
+      "last_records_csv": 1,
+      "zero_csv_streak": 0
+    },
+    "follow up sprzedażowy": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "automatyczne follow up": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "kwalifikacja leadów": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "proces sprzedażowy": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "ręczna praca w sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    },
+    "agent AI dla sprzedaży": {
+      "last_posts": 0,
+      "last_records_csv": 0,
+      "zero_csv_streak": 1
+    }
+  }
+}

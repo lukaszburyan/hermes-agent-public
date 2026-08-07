@@ -1,0 +1,2 @@
+# Hermes RFQ pollers are scheduled exclusively by the packaged systemd timers.
+# Do not add poller commands here: they would create a second scheduler.

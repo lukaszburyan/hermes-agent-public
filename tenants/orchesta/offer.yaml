@@ -1,0 +1,46 @@
+# Single source of required-data rules for the Orchesta tenant.
+#
+# Each field maps to a rule with:
+#   required_for:    list of pipeline stages that need this field
+#                     (qualification, final_offer)
+#   customer_visible: whether this field's value is shown back to the
+#                     customer in replies or the offer
+#
+# Consumers (first response, follow-up questions, completeness check,
+# qualification, offer generation, price calculation, tests) read from
+# this file. The LLM never invents the field list; it picks fields from
+# here for the given tenant_id.
+#
+# Spec: section 4 (Jedno źródło danych wymaganych w rozmowie).
+
+fields:
+  company_name_or_website:
+    required_for:
+      - qualification
+      - final_offer
+    customer_visible: true
+
+  current_process:
+    required_for:
+      - qualification
+    customer_visible: true
+
+  inquiry_channels:
+    required_for:
+      - qualification
+    customer_visible: true
+
+  monthly_volume:
+    required_for:
+      - final_offer
+    customer_visible: true
+
+  mailbox_count:
+    required_for:
+      - final_offer
+    customer_visible: true
+
+  crm:
+    required_for:
+      - final_offer
+    customer_visible: true

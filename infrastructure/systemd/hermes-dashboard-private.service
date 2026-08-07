@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep Hermes dashboard private to localhost/SSH tunnel
+After=network-online.target docker.service ufw.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/usr/sbin/iptables -C INPUT -p tcp --dport 32768 ! -i lo -j DROP 2>/dev/null || /usr/sbin/iptables -I INPUT 1 -p tcp --dport 32768 ! -i lo -j DROP; /usr/sbin/ip6tables -C INPUT -p tcp --dport 32768 ! -i lo -j DROP 2>/dev/null || /usr/sbin/ip6tables -I INPUT 1 -p tcp --dport 32768 ! -i lo -j DROP'
+ExecStop=/bin/sh -c '/usr/sbin/iptables -D INPUT -p tcp --dport 32768 ! -i lo -j DROP 2>/dev/null || true; /usr/sbin/ip6tables -D INPUT -p tcp --dport 32768 ! -i lo -j DROP 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

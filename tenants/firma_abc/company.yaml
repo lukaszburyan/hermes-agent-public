@@ -1,0 +1,22 @@
+# Firma ABC company identity (example second tenant, spec section 2/3).
+# Demonstrates that adding a company does not require copying the repository —
+# only a new tenant package under tenants/.
+
+company:
+  name: Firma ABC
+  website: https://firma-abc.pl
+  mailbox: identity-068@example.invalid
+  language: pl
+
+seller:
+  first_name: Jan
+  last_name: Kowalski
+  full_name: Jan Kowalski
+  phone: "+48 600 000 000"
+  linkedin: ""
+
+footer: |-
+  --
+  Jan Kowalski
+  Firma ABC
+  📞 +48 600 000 000

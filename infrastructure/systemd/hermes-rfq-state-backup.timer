@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule encrypted off-site Hermes RFQ state backups
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Europe/Warsaw
+RandomizedDelaySec=10min
+Persistent=true
+Unit=hermes-rfq-state-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect and enforce Hermes RFQ release monitoring gates
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStartPre=/usr/local/sbin/hermes-rfq-scheduler-inventory ${HERMES_RUNTIME_DIR}/rfq-state/scheduler-inventory.json
+ExecStart=/usr/bin/docker exec ${HERMES_CONTAINER_NAME} /opt/data/scripts/hermes-release-monitor.sh
+TimeoutStartSec=90
+Nice=15

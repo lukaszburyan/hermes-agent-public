@@ -1,0 +1,9 @@
+-r requirements-release.in
+
+bandit[toml]>=1.8,<2
+mypy>=1.18,<2
+pip-audit>=2.9,<3
+pytest>=9,<10
+ruff>=0.14,<1
+types-PyYAML>=6,<7
+yamllint>=1.37,<2

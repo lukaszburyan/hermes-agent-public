@@ -1,0 +1,14 @@
+[Unit]
+Description=Hermes Telegram Gateway (Docker)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStart=/usr/local/bin/hermes-gateway-run.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Fail-closed host preflight for an immutable Hermes RFQ deployment."""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+REQUIRED_RELEASE_KEYS = (
+    "HERMES_CONTAINER_NAME",
+    "HERMES_RUNTIME_DIR",
+    "HERMES_RUNTIME_ENV_FILE",
+    "HERMES_RCLONE_CONFIG_FILE",
+    "HERMES_RELEASE_IMAGE",
+    "HERMES_RELEASE_DIGEST",
+)
+REQUIRED_RUNTIME_KEYS = (
+    "ZOHO_MAIL_CLIENT_ID",
+    "ZOHO_MAIL_CLIENT_SECRET",
+    "ZOHO_MAIL_REFRESH_TOKEN",
+    "ZOHO_MAIL_ACCOUNT_EMAIL",
+    "HERMES_INTERNAL_NOTIFY_EMAIL",
+    "HERMES_GOOGLE_SHEETS_SPREADSHEET_ID",
+    "HERMES_BACKUP_AGE_RECIPIENT",
+    "HERMES_BACKUP_OFFSITE_REMOTE",
+    "HERMES_BACKUP_RETENTION_DAYS",
+    "HERMES_BACKUP_RETENTION_DELETE_APPROVED",
+)
+
+
+def read_environment(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def secure_file(path: Path, errors: list[str], *, json_file: bool = False) -> None:
+    if not path.is_file():
+        errors.append(f"required_file_missing:{path}")
+        return
+    if path.stat().st_mode & 0o077:
+        errors.append(f"sensitive_file_permissions_too_open:{path}")
+    if json_file:
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            errors.append(f"json_invalid:{path}")
+
+
+def sqlite_ok(path: Path, errors: list[str]) -> None:
+    if not path.is_file():
+        errors.append(f"required_state_missing:{path}")
+        return
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        errors.append(f"sqlite_open_failed:{path}")
+        return
+    if result != ("ok",):
+        errors.append(f"sqlite_quick_check_failed:{path}")
+
+
+def collect(release_environment_file: Path) -> dict[str, object]:
+    errors: list[str] = []
+    if not release_environment_file.is_file():
+        return {"status": "error", "errors": [f"release_environment_missing:{release_environment_file}"]}
+    release = read_environment(release_environment_file)
+    for key in REQUIRED_RELEASE_KEYS:
+        if not release.get(key):
+            errors.append(f"release_key_missing:{key}")
+    digest = release.get("HERMES_RELEASE_DIGEST", "")
+    if not DIGEST_RE.fullmatch(digest) or digest == "sha256:" + "0" * 64:
+        errors.append("release_digest_invalid_or_placeholder")
+    if ":latest" in release.get("HERMES_RELEASE_IMAGE", ""):
+        errors.append("release_image_uses_latest")
+    if release.get("HERMES_TRANSPORT_KILL_SWITCH") != "1":
+        errors.append("transport_kill_switch_must_be_enabled_for_preflight")
+    if release.get("HERMES_OPERATIONAL_AUTOSEND_ENABLED") != "0":
+        errors.append("operational_autosend_must_be_disabled_for_preflight")
+
+    runtime = Path(release.get("HERMES_RUNTIME_DIR") or "/nonexistent")
+    runtime_environment_file = Path(release.get("HERMES_RUNTIME_ENV_FILE") or "/nonexistent")
+    rclone_config = Path(release.get("HERMES_RCLONE_CONFIG_FILE") or "/nonexistent")
+    secure_file(runtime_environment_file, errors)
+    secure_file(rclone_config, errors)
+    runtime_environment: dict[str, str] = {}
+    if runtime_environment_file.is_file():
+        runtime_environment = read_environment(runtime_environment_file)
+        for key in REQUIRED_RUNTIME_KEYS:
+            if not runtime_environment.get(key):
+                errors.append(f"runtime_key_missing:{key}")
+        if "OPENAI_API_KEY" in runtime_environment:
+            errors.append("token_billed_openai_api_key_forbidden")
+        for key in ("ORCHESTA_RFQ_ALLOW_EXTERNAL_VISION", "ORCHESTA_RFQ_ALLOW_SCHEMA_MODEL"):
+            if runtime_environment.get(key, "0") != "0":
+                errors.append(f"external_model_gate_must_be_zero:{key}")
+        if runtime_environment.get("HERMES_BACKUP_RETENTION_DELETE_APPROVED") != "1":
+            errors.append("backup_retention_delete_not_approved")
+
+    for name in ("config.yaml", "auth.json", "google_client_secret.json", "google_token.json"):
+        secure_file(runtime / name, errors, json_file=name.endswith(".json"))
+    for name in ("cron", "state", "tmp", "logs", "reports", "backups", "sessions", "CRM", "rfq-runtime"):
+        if not (runtime / name).is_dir():
+            errors.append(f"runtime_directory_missing:{runtime / name}")
+    sqlite_ok(runtime / "state" / "state.sqlite3", errors)
+    sqlite_ok(runtime / "tmp" / "orchesta-rfq-unified.sqlite3", errors)
+    sheets_state = runtime / "tmp" / "google-sheets-leads-state.json"
+    if sheets_state.is_file():
+        try:
+            json.loads(sheets_state.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            errors.append(f"json_invalid:{sheets_state}")
+    else:
+        errors.append(f"required_state_missing:{sheets_state}")
+    return {
+        "status": "ok" if not errors else "error",
+        "release_environment": str(release_environment_file),
+        "runtime_directory": str(runtime),
+        "checks": {
+            "release_keys": len(REQUIRED_RELEASE_KEYS),
+            "runtime_keys": len(REQUIRED_RUNTIME_KEYS),
+            "sqlite_databases": 2,
+            "json_state_files": 4,
+        },
+        "errors": errors,
+    }
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: hermes-release-preflight RELEASE_ENV_FILE", file=sys.stderr)
+        return 64
+    report = collect(Path(sys.argv[1]))
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["status"] == "ok" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

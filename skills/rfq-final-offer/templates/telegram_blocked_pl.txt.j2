@@ -1,0 +1,3 @@
+Nie powstał PDF oferty dla {{ client.company or "nieznanej firmy" }}.
+Powód: {{ reason }}.
+{% if questions %}Wysłano (lub przygotowano) do klienta pytania doprecyzowujące zamiast finalnej oferty.{% else %}Sprawa wymaga ręcznego sprawdzenia — brak bezpiecznych pytań do auto-wysyłki.{% endif %}

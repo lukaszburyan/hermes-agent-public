@@ -1,0 +1,27 @@
+{
+  "package": "orchesta-rfq-logika",
+  "generated_at": "2026-07-29",
+  "primary_document": "02-logika-prostym-jezykiem.md",
+  "files": [
+    {
+      "file": "01-logika-systemu-od-poczatku-do-konca.md",
+      "size_bytes": 34450,
+      "sha256": "7d953160cddac2c8ea6c01c6d3f3d8d9c115cb0f3b1f9a230251976dbdad7905"
+    },
+    {
+      "file": "02-logika-prostym-jezykiem.md",
+      "size_bytes": 24853,
+      "sha256": "aa124434d56c7f924dd9c5d6d77b3e4682b8b25ed666284b4ca1334e59e6e4cf"
+    },
+    {
+      "file": "README.md",
+      "size_bytes": 982,
+      "sha256": "4f6e1e823bf30efa02956ac4b9e5ceeb7c0f0f9bde9bd953678864c94f0c8a2d"
+    },
+    {
+      "file": "test-results.txt",
+      "size_bytes": 1222,
+      "sha256": "66ae3a44d28ad5806ff53ea9d163e7447e37a7b1cd3261d8a6fed2c7b1979127"
+    }
+  ]
+}

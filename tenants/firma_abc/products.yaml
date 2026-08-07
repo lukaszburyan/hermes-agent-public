@@ -1,0 +1,25 @@
+# Firma ABC product catalog and pricing (example, spec section 2).
+
+pricing_id: firma-abc-2026-08
+currency: PLN
+display_currency: zł
+tax_mode: net
+
+base_offer:
+  name: "Firma ABC, wdrożenie podstawowe"
+  net_price: 5000
+  includes_seats: 1
+
+additional_seat:
+  name: "Każde kolejne stanowisko"
+  net_price: 1500
+
+payment:
+  terms: "50% z góry, 50% po wdrożeniu"
+
+implementation:
+  days: 10
+
+guarantee:
+  days: 14
+  refund: "50% kwoty"

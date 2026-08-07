@@ -1,0 +1,18 @@
+# Mailbox -> tenant_id mapping (spec section 3: Rozpoznawanie firmy).
+#
+# The poller resolves tenant_id from the inbound mailbox address before any
+# processing. An unknown mailbox must NOT fall back to the Orchesta profile;
+# it routes to ``state: awaiting_human`` / ``decision_reason: tenant_not_resolved``
+# (spec section 2).
+#
+# Lower-cased on read. Add one entry per monitored inbound address.
+
+mailboxes:
+  rfq-mailbox@example.invalid:
+    tenant_id: orchesta
+  identity-069@example.invalid:
+    tenant_id: orchesta
+  identity-007@example.invalid:
+    tenant_id: orchesta
+  identity-068@example.invalid:
+    tenant_id: firma_abc

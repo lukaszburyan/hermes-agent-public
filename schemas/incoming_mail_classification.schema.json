@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hermes/schemas/incoming_mail_classification.schema.json",
+  "title": "IncomingMailClassification",
+  "description": "LLM output for incoming-mail intent classification (spec section 9). The LLM returns only this JSON; the script makes the final decision (spec section 10).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent",
+    "confidence",
+    "risk",
+    "sender_identity",
+    "provided_information",
+    "missing_information",
+    "recommended_action",
+    "decision_reasons",
+    "language"
+  ],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "product_fit_inquiry",
+        "product_information_request",
+        "demo_request",
+        "pricing_request",
+        "implementation_question",
+        "support_request",
+        "existing_customer_reply",
+        "partnership_or_vendor",
+        "job_or_recruitment",
+        "unclear_business_inquiry",
+        "automated_message",
+        "spam_or_security_risk",
+        "unrelated"
+      ]
+    },
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
+    "sender_identity": {
+      "type": "string",
+      "description": "e.g. free_email_unverified, company_domain_verified, automated_sender"
+    },
+    "provided_information": {
+      "type": "object",
+      "description": "Field names from discovery.yaml/offer.yaml mapped to values the customer already gave.",
+      "additionalProperties": true
+    },
+    "missing_information": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Field names from discovery.yaml/offer.yaml still needed for the current stage."
+    },
+    "recommended_action": {
+      "type": "string",
+      "enum": [
+        "ask_discovery_questions",
+        "reply_directly",
+        "prepare_offer",
+        "draft_for_human",
+        "block_security",
+        "ignore_automated",
+        "awaiting_human"
+      ]
+    },
+    "decision_reasons": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Human-readable reason codes explaining the recommendation."
+    },
+    "language": {"type": "string", "enum": ["pl", "en"]},
+    "salutation_name": {
+      "type": "string",
+      "description": "Customer first name for salutation, empty if unknown."
+    },
+    "salutation_form": {
+      "type": "string",
+      "description": "Vocative-case salutation in the customer's language, empty if unknown."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# Orchesta discovery question texts (spec section 2: sales questions live in the
+# tenant package). One entry per field from offer.yaml / discovery fields.
+#
+# Consumed by: first-response composer, follow-up question builder, LLM reply
+# writer (the LLM picks fields from offer.yaml; the question text comes from
+# here). PL/EN pairs.
+
+questions:
+  mailbox_count:
+    pl: "Ile kont pocztowych ma śledzić system?"
+    en: "How many inboxes should the system monitor?"
+  crm:
+    pl: "Czy uwzględnić integrację z CRM w ofercie?"
+    en: "Should the offer include CRM integration?"
+  company_name_or_website:
+    pl: "Na jaką firmę mam przygotować ofertę?"
+    en: "Which company should I prepare the offer for?"
+  current_process:
+    pl: "Jak obecnie wygląda u Państwa proces obsługi zapytań?"
+    en: "What does your current inquiry-handling process look like?"
+  inquiry_channels:
+    pl: "Z jakich kanałów wpadają Państwu zapytania ofertowe?"
+    en: "Through which channels do your RFQs come in?"
+  monthly_volume:
+    pl: "Ile zapytań ofertowych przyjmujecie Państwo miesięcznie?"
+    en: "How many RFQs do you receive per month?"

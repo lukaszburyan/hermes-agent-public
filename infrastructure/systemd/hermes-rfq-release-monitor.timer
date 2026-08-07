@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule Hermes RFQ release monitoring
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+AccuracySec=10s
+Persistent=true
+Unit=hermes-rfq-release-monitor.service
+
+[Install]
+WantedBy=timers.target

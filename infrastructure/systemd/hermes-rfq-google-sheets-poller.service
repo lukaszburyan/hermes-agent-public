@@ -1,0 +1,11 @@
+[Unit]
+Description=Hermes RFQ canonical Google Sheets poller
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStart=/usr/bin/docker exec ${HERMES_CONTAINER_NAME} /opt/data/scripts/google-sheets-lead-poller.sh
+TimeoutStartSec=300
+Nice=10

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Hermes VPS host audit daily before Telegram delivery
+
+[Timer]
+OnCalendar=*-*-* 07:55:00 Europe/Warsaw
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+{{ salutation }}
+
+{{ missing_data_intro }} {{ question_count_word }}:
+
+{% for question in questions -%}
+{{ loop.index }}. {{ question }}
+{% endfor %}
+{{ missing_data_outro }}
+
+{{ footer }}

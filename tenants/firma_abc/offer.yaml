@@ -1,0 +1,19 @@
+# Firma ABC required-data rules (spec section 4). A different tenant can
+# require a different field set; the LLM picks fields from this file only.
+
+fields:
+  company_name_or_website:
+    required_for:
+      - qualification
+      - final_offer
+    customer_visible: true
+
+  current_process:
+    required_for:
+      - qualification
+    customer_visible: true
+
+  monthly_volume:
+    required_for:
+      - final_offer
+    customer_visible: true
