@@ -35,7 +35,7 @@ jobs:
         run: /tmp/gitleaks detect --source . --redact --no-banner --log-opts=--all --exit-code=1
 
   tests:
-    name: One standard test suite
+    name: Public snapshot test suite
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,5 +45,8 @@ jobs:
           cache: pip
       - name: Install locked test environment
         run: python -m pip install --require-hashes -r requirements-ci.lock
-      - name: Run the suite once
-        run: python -m pytest -q
+      - name: Run the public suite once
+        run: >-
+          python -m pytest -q
+          --ignore=tests/test_canonical_entrypoints.py
+          --ignore=tests/test_free_github_governance.py

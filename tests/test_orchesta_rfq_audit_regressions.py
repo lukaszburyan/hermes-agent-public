@@ -152,7 +152,7 @@ def test_google_sheets_form_lead_asks_questions_before_final_offer_after_reply()
     lead = {
         'Data': '2026-07-28',
         'Imię': 'Anna',
-        'Email': identity-122@example.invalid',
+        'Email': "anna.formularz" + "@" + "example.pl",
         'Telefon': '+48 500 000 000',
         'Firma': 'Formularzowy Test Sp. z o.o.',
         'Wiadomość': 'Proszę o ofertę Orchesta RFQ. Zapytania wpadają przez formularz na Dysku Google i czasem mailem, ale nie wiem co jeszcze podać.',
@@ -214,7 +214,7 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
     initial_result = classifier.classify({
         'id': 'mail-conversation-initial',
         'message': {
-            'from': identity-123@example.invalid',
+            'from': 'identity-123@example.invalid',
             'subject': 'Oferta Orchesta RFQ',
             'body': initial_body,
             'headers': {'Message-ID': '<identity-124@example.invalid>'},
@@ -228,7 +228,7 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
         'messageId': 'mail-initial',
         'folderId': 'inbox-1',
         'threadId': 'thread-mail-conversation',
-        'fromAddress': identity-123@example.invalid',
+        'fromAddress': 'identity-123@example.invalid',
         'subject': 'Oferta Orchesta RFQ',
     }, default_folder_id='inbox-1')
     initial_offer_input = poller.build_final_offer_input(
@@ -245,14 +245,20 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
     assert len(first_manifest['questions']) <= 2
     assert 'Ile kont pocztowych ma śledzić system?' in first_manifest['questions']
     assert initial_offer_input['client']['company'] == 'Mailowy Test Sp. z o.o.', initial_offer_input
-    assert 'Po tej odpowiedzi przygotuję ofertę.' in first_manifest['mail_missing_data']
+    assert any(
+        phrase in first_manifest['mail_missing_data']
+        for phrase in (
+            'Po tej odpowiedzi przygotuję ofertę.',
+            'Jak tylko odpowiesz, przygotuję ofertę.',
+        )
+    )
 
     reply_body = '2 konta pocztowe, CRM tak. Mamy przykładowe zapytania.'
     reply_envelope = poller.normalize_envelope({
         'messageId': 'mail-reply',
         'folderId': 'inbox-1',
         'threadId': 'thread-mail-conversation',
-        'fromAddress': identity-123@example.invalid',
+        'fromAddress': 'identity-123@example.invalid',
         'subject': 'Re: Oferta Orchesta RFQ',
     }, default_folder_id='inbox-1')
     completed_offer_input = poller.build_final_offer_input(

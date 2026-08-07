@@ -32,10 +32,12 @@ def test_sheet_and_mail_events_resolve_to_one_deal_and_one_pre_offer_response():
     registry_mod = load_module('unified_lead_registry_test_1', REGISTRY)
     with tempfile.TemporaryDirectory() as tmp:
         registry = registry_mod.UnifiedLeadRegistry(Path(tmp) / 'state.sqlite3')
+        sheet_email = "Anna.Example+campaign" + "@" + "gmail.com"
+        mail_email = "annaexample" + "@" + "gmail.com"
         sheet = registry.register_event(
             source_type='google_sheets',
             source_key='sheet:main:2',
-            identity-155@example.invalid',
+            email=sheet_email,
             company='Example Sp. z o.o.',
             contact_name='Anna Example',
             content='Proszę o ofertę Orchesta RFQ dla formularza i maila.',
@@ -50,7 +52,7 @@ def test_sheet_and_mail_events_resolve_to_one_deal_and_one_pre_offer_response():
         mail = registry.register_event(
             source_type='mail',
             source_key='zoho-message-1',
-            identity-156@example.invalid',
+            email=mail_email,
             company='Example Sp. z o.o.',
             contact_name='Anna Example',
             content='Proszę o ofertę Orchesta RFQ dla formularza i maila.',
@@ -163,7 +165,7 @@ def test_notification_recipient_is_hard_allowlisted_and_offer_contains_required_
         raise AssertionError('external notification recipient should be blocked')
     except PermissionError:
         pass
-    assert notify.validate_internal_recipient(identity-158@example.invalid') == identity-158@example.invalid'
+    assert notify.validate_internal_recipient(notify.DEFAULT_RECIPIENT) == notify.DEFAULT_RECIPIENT
     built = notify.build_notification({
         'source': 'mailbox',
         'woken': 1,

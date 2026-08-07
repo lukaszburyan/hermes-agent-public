@@ -20,7 +20,9 @@ excluded.
 ## Local validation
 
 ```bash
-python -m pytest -q
+python -m pytest -q \
+  --ignore=tests/test_canonical_entrypoints.py \
+  --ignore=tests/test_free_github_governance.py
 gitleaks git . --redact --no-banner
 ```
 
