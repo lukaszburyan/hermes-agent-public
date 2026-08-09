@@ -10,12 +10,17 @@ import sys
 from pathlib import Path
 
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?")
 REQUIRED_RELEASE_KEYS = (
     "HERMES_CONTAINER_NAME",
     "HERMES_RUNTIME_DIR",
     "HERMES_RUNTIME_ENV_FILE",
+    "HERMES_RCLONE_CONFIG_DIR",
     "HERMES_RCLONE_CONFIG_FILE",
     "HERMES_RELEASE_IMAGE",
+    "HERMES_RELEASE_COMMIT",
+    "HERMES_RELEASE_TAG",
     "HERMES_RELEASE_DIGEST",
 )
 REQUIRED_RUNTIME_KEYS = (
@@ -56,6 +61,14 @@ def secure_file(path: Path, errors: list[str], *, json_file: bool = False) -> No
             errors.append(f"json_invalid:{path}")
 
 
+def secure_directory(path: Path, errors: list[str]) -> None:
+    if not path.is_dir():
+        errors.append(f"required_directory_missing:{path}")
+        return
+    if path.stat().st_mode & 0o077:
+        errors.append(f"sensitive_directory_permissions_too_open:{path}")
+
+
 def sqlite_ok(path: Path, errors: list[str]) -> None:
     if not path.is_file():
         errors.append(f"required_state_missing:{path}")
@@ -84,6 +97,12 @@ def collect(release_environment_file: Path) -> dict[str, object]:
     digest = release.get("HERMES_RELEASE_DIGEST", "")
     if not DIGEST_RE.fullmatch(digest) or digest == "sha256:" + "0" * 64:
         errors.append("release_digest_invalid_or_placeholder")
+    commit = release.get("HERMES_RELEASE_COMMIT", "")
+    if not COMMIT_RE.fullmatch(commit) or commit == "0" * 40:
+        errors.append("release_commit_invalid_or_placeholder")
+    tag = release.get("HERMES_RELEASE_TAG", "")
+    if not TAG_RE.fullmatch(tag) or tag == "v0.0.0-placeholder":
+        errors.append("release_tag_invalid_or_placeholder")
     if ":latest" in release.get("HERMES_RELEASE_IMAGE", ""):
         errors.append("release_image_uses_latest")
     if release.get("HERMES_TRANSPORT_KILL_SWITCH") != "1":
@@ -93,9 +112,13 @@ def collect(release_environment_file: Path) -> dict[str, object]:
 
     runtime = Path(release.get("HERMES_RUNTIME_DIR") or "/nonexistent")
     runtime_environment_file = Path(release.get("HERMES_RUNTIME_ENV_FILE") or "/nonexistent")
+    rclone_config_directory = Path(release.get("HERMES_RCLONE_CONFIG_DIR") or "/nonexistent")
     rclone_config = Path(release.get("HERMES_RCLONE_CONFIG_FILE") or "/nonexistent")
     secure_file(runtime_environment_file, errors)
+    secure_directory(rclone_config_directory, errors)
     secure_file(rclone_config, errors)
+    if rclone_config.parent.resolve() != rclone_config_directory.resolve():
+        errors.append("rclone_config_file_not_in_dedicated_directory")
     runtime_environment: dict[str, str] = {}
     if runtime_environment_file.is_file():
         runtime_environment = read_environment(runtime_environment_file)
@@ -107,8 +130,8 @@ def collect(release_environment_file: Path) -> dict[str, object]:
         for key in ("ORCHESTA_RFQ_ALLOW_EXTERNAL_VISION", "ORCHESTA_RFQ_ALLOW_SCHEMA_MODEL"):
             if runtime_environment.get(key, "0") != "0":
                 errors.append(f"external_model_gate_must_be_zero:{key}")
-        if runtime_environment.get("HERMES_BACKUP_RETENTION_DELETE_APPROVED") != "1":
-            errors.append("backup_retention_delete_not_approved")
+        if runtime_environment.get("HERMES_BACKUP_RETENTION_DELETE_APPROVED") not in {"0", "1"}:
+            errors.append("backup_retention_delete_approval_invalid")
 
     for name in ("config.yaml", "auth.json", "google_client_secret.json", "google_token.json"):
         secure_file(runtime / name, errors, json_file=name.endswith(".json"))

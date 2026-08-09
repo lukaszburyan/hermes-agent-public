@@ -11,10 +11,11 @@ Dzień dobry Panie Tomaszu,
 
 Po tej odpowiedzi przygotuję ofertę.
 
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq
 
 ## Final Offer Draft
 
@@ -24,7 +25,8 @@ w załączniku dodaję gotową ofertę wdrożenia systemu Orchesta.
 
 W razie akceptacji wystarczy odpowiedzieć na tę wiadomość.
 
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq

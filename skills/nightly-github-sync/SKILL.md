@@ -2,7 +2,7 @@
 
 Use to back up Hermes state to the private GitHub repo every night.
 
-Target repo: `https://github.com/lukaszburyan/hermes-agent-main`
+Target repo: `https://github.com/lukaszburyan/hermes-agent-public`
 
 ## Guardrails
 

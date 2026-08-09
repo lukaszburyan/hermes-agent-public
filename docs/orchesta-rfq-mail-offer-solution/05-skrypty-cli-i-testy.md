@@ -1129,8 +1129,8 @@ CASE_ID_RE = re.compile(r"\[HRFQ-AUTO-\d{8}-\d{6}-([A-Z])\]")
 DEFAULT_ALLOWED_SENDERS = {
     "test-customer-2@example.invalid",
     "test-customer-1@example.invalid",
-    "identity-003@example.invalid",
-    "identity-004@example.invalid",
+    "identity-001@gmail.com",
+    "identity-002@gmail.com",
     "notifications@example.invalid",
 }
 

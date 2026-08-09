@@ -33,35 +33,16 @@ if str(EXECUTION_DIR) not in sys.path:
     sys.path.insert(0, str(EXECUTION_DIR))
 
 import tenant_config  # noqa: E402
+from reply_contract import DEFAULT_REPLY_CONTRACT  # noqa: E402
 
 # Spec section 15: target 40-100 words, hard max 120.
-MIN_TARGET_WORDS = 40
-MAX_TARGET_WORDS = 100
-HARD_MAX_WORDS = 120
-MAX_QUESTIONS = 2
+MIN_TARGET_WORDS = DEFAULT_REPLY_CONTRACT.target_words_min
+MAX_TARGET_WORDS = DEFAULT_REPLY_CONTRACT.target_words_max
+HARD_MAX_WORDS = DEFAULT_REPLY_CONTRACT.hard_words_max
+MAX_QUESTIONS = DEFAULT_REPLY_CONTRACT.max_questions
 
 # Telegram / internal-alarm terms must never appear in customer-facing replies.
-FORBIDDEN_TERMS = (
-    "telegram",
-    "deal_id",
-    "routing",
-    "classifier",
-    "prompt",
-    "llm",
-    "poller",
-    "manual_review",
-    "human_takeover",
-    "conversation_handoff",
-    "discovery_dead_end",
-    "ready_for_final_offer",
-    "skip_pre_offer_send",
-    "commercial_exception",
-    "wewnętrzne powiadomienie",
-    "wewnetrzne powiadomienie",
-    "automatyzacja rozmowy",
-    "automatyczna rozmowa",
-    "hermes",
-)
+FORBIDDEN_TERMS = DEFAULT_REPLY_CONTRACT.forbidden_terms
 
 # A reasonable emoji range + a few symbol blocks. Keeps the check cheap and
 # deterministic without pulling a unicode table dependency.
@@ -99,11 +80,21 @@ def _question_count(text: str) -> int:
 
 
 def _greeting_present(text: str) -> bool:
-    return bool(re.match(r"\s*Dzień\s+dobry", text or "", re.IGNORECASE))
+    return bool(re.match(
+        r"\s*(?:Dzień\s+dobry|Good\s+(?:morning|afternoon|evening)|Hello|"
+        r"Guten\s+(?:Morgen|Tag|Abend)|Hallo)\b",
+        text or "",
+        re.IGNORECASE,
+    ))
 
 
 def _thanks_present(text: str) -> bool:
-    return "dziękuję za wiadomość" in (text or "").lower()
+    return bool(re.search(
+        r"(?:dziękuję|dziekuje)\s+za\s+wiadomość|thank\s+you\s+for\s+(?:your\s+)?message|"
+        r"vielen\s+dank\s+für\s+(?:ihre\s+)?nachricht",
+        text or "",
+        re.IGNORECASE,
+    ))
 
 
 def _ascii_lower(text: Any) -> str:

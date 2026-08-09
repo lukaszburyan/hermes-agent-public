@@ -185,12 +185,12 @@ user are broadcast to every connection. Filter messages client-side by
 ```bash
 # Image
 curl -X POST "http://127.0.0.1:8188/upload/image" \
-  -F "identity-033@example.invalid" -F "type=input" -F "overwrite=true"
+  -F "image=@photo.png" -F "type=input" -F "overwrite=true"
 # Returns: {"name": "photo.png", "subfolder": "", "type": "input"}
 
 # Mask (linked to a previously uploaded image)
 curl -X POST "http://127.0.0.1:8188/upload/mask" \
-  -F "identity-034@example.invalid" -F "type=input" \
+  -F "image=@mask.png" -F "type=input" \
   -F 'original_ref={"filename":"photo.png","subfolder":"","type":"input"}'
 ```
 

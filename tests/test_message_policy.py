@@ -31,7 +31,10 @@ def test_required_message_types_and_transport_modes_are_stable():
     }
     assert FINAL_OFFER not in AUTO_SEND_TYPES
     for message_type in AUTO_SEND_TYPES:
-        assert decide_message_policy(message_type).transport_mode == "auto_send"
+        assert decide_message_policy(
+            message_type,
+            body_text="Dziękuję, przygotujemy bezpieczną odpowiedź po sprawdzeniu danych.",
+        ).transport_mode == "auto_send"
     assert decide_message_policy(FINAL_OFFER).transport_mode == "draft_only"
 
 

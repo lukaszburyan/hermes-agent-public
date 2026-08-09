@@ -7,7 +7,7 @@
 internal_notifications:
   email:
     enabled: true
-    recipient: identity-008@example.invalid
+    recipient: identity-004@gmail.com
 
   human_review:
     telegram:

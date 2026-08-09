@@ -100,7 +100,7 @@ def test_sheet_outcome_unknown_reconciles_only_by_exact_sent_marker(monkeypatch:
             pass
 
         def list_accounts(self):
-            return [{"accountId": "acc-1"}]
+            return [{"accountId": "acc-1", "primaryEmailAddress": "rfq@example.com"}]
 
         def list_folders(self, _account_id):
             return [{"folderId": "sent-1", "folderName": "Sent", "folderType": "Sent"}]
@@ -118,6 +118,7 @@ def test_sheet_outcome_unknown_reconciles_only_by_exact_sent_marker(monkeypatch:
             return f"Dziękuję<!-- hermes-send-marker:{marker} -->"
 
     monkeypatch.setattr(sheets, "HttpZohoClient", FakeClient)
+    monkeypatch.setenv("ZOHO_MAIL_ACCOUNT_EMAIL", "rfq@example.com")
     result = sheets.reconcile_sheet_send(
         lead={"Email": "client@example.com"},
         operation={
@@ -130,4 +131,3 @@ def test_sheet_outcome_unknown_reconciles_only_by_exact_sent_marker(monkeypatch:
     )
     assert result["resolved"] is True
     assert result["external_message_id"] == "sent-sheet-1"
-

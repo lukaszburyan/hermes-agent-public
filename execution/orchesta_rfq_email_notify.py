@@ -28,7 +28,8 @@ EXECUTION_DIR = Path(__file__).resolve().parent
 if str(EXECUTION_DIR) not in sys.path:
     sys.path.insert(0, str(EXECUTION_DIR))
 
-from zoho_mail_poller import HttpZohoClient  # noqa: E402
+from zoho_mail_poller import HttpZohoClient, select_account  # noqa: E402
+from unified_lead_registry import UnifiedLeadRegistry  # noqa: E402
 from zoho_reply_draft import HttpDraftPoster  # noqa: E402
 import tenant_config  # noqa: E402
 
@@ -37,6 +38,7 @@ DEFAULT_ENV_FILE = "/opt/data/.env"
 DEFAULT_RECIPIENT = tenant_config.internal_notification_email("orchesta")
 DEFAULT_DELIVERY_STATE_FILE = "/opt/data/.tmp/orchesta-rfq-notification-ledger.json"
 DEFAULT_HERMES_BIN = "/opt/hermes/.venv/bin/hermes"
+DEFAULT_REGISTRY_FILE = "/opt/data/.tmp/orchesta-rfq-unified.sqlite3"
 INTERNAL_RECIPIENTS = frozenset({DEFAULT_RECIPIENT})
 SECRET_RE = re.compile(r"(?i)(token|secret|password|refresh_token|access_token|client_secret|api_key)([\"\s:=]+)[A-Za-z0-9_.-]{8,}")
 SUCCESS_DRAFT_ACTIONS = frozenset({"created", "sent", "already_sent", "already_sent_reconciled"})
@@ -140,16 +142,18 @@ def reason_for(classification: str, draft_action: str, final_offer: dict[str, An
     if draft_action == "created" and final_offer and final_offer.get("action") == "created":
         price = final_offer.get("price_net_display")
         if price:
-            return f"przygotowałem draft finalnej oferty z PDF-em. W ofercie jest kwota {price} netto. Nic nie zostało wysłane automatycznie."
-        return "przygotowałem draft finalnej oferty z PDF-em. Nic nie zostało wysłane automatycznie."
+            return f"przygotowałem szkic ostatecznej oferty z plikiem PDF. W ofercie jest kwota {price} netto. Nic nie zostało wysłane automatycznie."
+        return "przygotowałem szkic ostatecznej oferty z plikiem PDF. Nic nie zostało wysłane automatycznie."
     if draft_action == "created":
-        return "przygotowałem draft odpowiedzi w Zoho, ale go nie wysłałem. Wymaga Twojego sprawdzenia przed wysyłką."
+        return "przygotowałem szkic odpowiedzi, ale go nie wysłałem. Wymaga Twojego sprawdzenia przed wysyłką."
     if draft_action == "deferred_content_unavailable":
         return "nie mogłem odczytać treści wiadomości z Zoho, więc niczego nie wysłałem i pozostawiłem sprawę do bezpiecznego ponowienia oraz Twojej kontroli."
     if draft_action == "sent_guard_failed":
         return "zablokowałem automatyczną odpowiedź, ponieważ nie udało się potwierdzić stanu folderu Wysłane; chroni to klienta przed duplikatem."
+    if draft_action == "blocked_human_takeover":
+        return "wykryłem Twoją ręczną odpowiedź w tej rozmowie, dlatego zatrzymałem automatykę tylko dla tej sprawy."
     if draft_action.startswith("blocked_"):
-        return "zablokowałem automatyczną odpowiedź przez bramkę bezpieczeństwa lub brak danych i niczego nie wysłałem do klienta."
+        return "nie odpowiedziałem automatycznie, ponieważ wiadomość wymaga sprawdzenia lub brakuje ważnej informacji. Nic nie zostało wysłane do klienta."
     if draft_action in {"auto_draft_failed", "final_offer_failed", "final_offer_blocked", "send_reconcile_pending"}:
         return "nie zakończyłem automatycznej obsługi tej sprawy; niczego nie wysłałem ponownie i potrzebna jest Twoja kontrola."
     if classification == "related_non_rfq_topic":
@@ -178,7 +182,6 @@ def prose_for_briefing(briefing: dict[str, Any]) -> str:
 
     text = (
         f"Napisała do Ciebie {label}: {sender_email}. "
-        f"Zaklasyfikowałem tę wiadomość jako {classification}. "
         f"{reason_for(classification, draft_action, final_offer, response_action)}"
     )
     if next_step:
@@ -191,12 +194,10 @@ def prose_for_briefing(briefing: dict[str, Any]) -> str:
         contact = str(client.get("contact_name") or client.get("full_name") or sender_email)
         scope = str(offer_details.get("scope_display") or "zakres w załączonej ofercie")
         price = str(offer_details.get("price_net_display") or "cena w ofercie")
-        draft_id = str(offer_details.get("draft_id") or "identyfikator draftu nieustalony")
         location = str(offer_details.get("draft_location") or "Zoho Mail > Drafts")
-        rfq_id = str(briefing.get("rfq_id") or briefing.get("deal_id") or "identyfikator sprawy nieustalony")
         text += (
-            f" Firma: {company}. Kontakt: {contact}. RFQ: {rfq_id}. Zakres: {scope}. "
-            f"Cena netto: {price}. Draft ID: {draft_id}. Draft: {location}. "
+            f" Firma: {company}. Kontakt: {contact}. Zakres: {scope}. "
+            f"Cena netto: {price}. Szkic znajdziesz tutaj: {location}. "
             "Oferta nie została wysłana klientowi."
         )
     return redact(text)
@@ -265,7 +266,6 @@ def build_notifications(
     selected_briefings: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, dict[str, Any], str, str]]:
     candidates = selected_briefings if selected_briefings is not None else summary.get("briefings", [])
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     result: list[tuple[str, dict[str, Any], str, str]] = []
     for briefing in candidates:
         if not isinstance(briefing, dict) or not _notifiable_briefing(briefing):
@@ -279,20 +279,23 @@ def build_notifications(
             or "deal-unknown"
         )
         base_key = _briefing_event_key(summary, briefing)
-        for event_type in _event_types(briefing):
-            event_key = hashlib.sha256(f"{base_key}|{event_type}".encode("utf-8")).hexdigest()
-            subject = f"Orchesta RFQ | {case_id} | {event_type} | {timestamp}"
-            text = "\n".join([
-                "Cześć Łukasz,",
-                "",
-                prose_for_briefing(briefing),
-                "",
-                f"Zdarzenie: {event_type}.",
-                "Każde powiadomienie jest osobną wiadomością i nie kontynuuje wcześniejszego wątku.",
-                "",
-                "Hermes / Orchesta RFQ",
-            ])
-            result.append((event_key, briefing, subject, text))
+        event_types = _event_types(briefing)
+        if not event_types:
+            continue
+        action = "Oferta gotowa" if "final offer draft ready" in event_types else "Wymaga sprawdzenia"
+        if "automatic pre-offer reply" in event_types and len(event_types) == 1:
+            action = "Odpowiedź wysłana"
+        event_key = hashlib.sha256(f"{base_key}|{action}".encode("utf-8")).hexdigest()
+        subject = f"Orchesta RFQ | {case_id} | {action}"
+        text = "\n".join([
+            "Cześć Łukasz,",
+            "",
+            f"Sprawa: {case_id}",
+            prose_for_briefing(briefing),
+            "",
+            "Hermes / Orchesta RFQ",
+        ])
+        result.append((event_key, briefing, subject, text))
     return result
 
 
@@ -322,9 +325,10 @@ def send_email(*, token_file: str, env_file: str, recipient: str, subject: str, 
         client = HttpZohoClient(token_file, env_file)
         poster = HttpDraftPoster(token_file)
         accounts = client.list_accounts()
-        if not accounts:
-            raise RuntimeError("no_zoho_accounts")
-        account = accounts[0]
+        configured_account = str(os.environ.get("ZOHO_MAIL_ACCOUNT_EMAIL") or "").strip()
+        if not configured_account:
+            raise RuntimeError("zoho_account_resolution_failed:configuration_missing")
+        account = select_account(accounts, configured_account)
         account_id = str(account["accountId"])
         from_addr = str(account.get("primaryEmailAddress") or "rfq-mailbox@example.invalid")
         payload = build_email_payload(
@@ -408,6 +412,7 @@ def _briefing_event_key(summary: dict[str, Any], briefing: dict[str, Any]) -> st
     else:
         # One customer thread may contain several independent inbound events.
         identifiers = [
+            briefing.get("task_id"),
             briefing.get("message_id"),
             draft.get("source_message_id"),
             response.get("external_message_id"),
@@ -428,6 +433,84 @@ def _briefing_event_key(summary: dict[str, Any], briefing: dict[str, Any]) -> st
         }
         identity = json.dumps(identity_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(f"{source}|{identity}".encode("utf-8")).hexdigest()
+
+
+def append_durable_review_tasks(summary: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Project the durable review queue into notifier input; tasks remain truth."""
+    enriched = dict(summary)
+    briefings = [item for item in list(summary.get("briefings") or []) if isinstance(item, dict)]
+    represented = {str(item.get("task_id") or "") for item in briefings}
+    represented_deals = {str(item.get("deal_id") or "") for item in briefings if str(item.get("deal_id") or "")}
+    represented_messages = {str(item.get("message_id") or "") for item in briefings if str(item.get("message_id") or "")}
+    for task in tasks:
+        task_id = str(task.get("task_id") or "")
+        task_deal = str(task.get("deal_id") or "")
+        task_source = str(task.get("source_key") or "")
+        source_is_current_message = any(
+            task_source == message_id or task_source.endswith(f":{message_id}")
+            for message_id in represented_messages
+        )
+        if (
+            not task_id
+            or task_id in represented
+            or (task_deal and task_deal in represented_deals)
+            or source_is_current_message
+        ):
+            continue
+        reasons = list(task.get("reason_codes") or task.get("validation_errors") or [])
+        briefings.append({
+            "task_id": task_id,
+            "deal_id": str(task.get("deal_id") or ""),
+            "correlation_id": str(task.get("operation_id") or task_id),
+            "classification": "human_review_only",
+            "routing_action": "review",
+            "reason_code": ",".join(str(reason) for reason in reasons),
+            "sender": {"email": str(task.get("recipient") or ""), "relationship": "known"},
+            "response": {"action": "blocked", "error": ",".join(str(reason) for reason in reasons)},
+            "next_step": "Otwórz sprawę, przeczytaj wiadomość i zdecyduj o dalszej odpowiedzi.",
+        })
+    enriched["briefings"] = briefings
+    return enriched
+
+
+def review_tasks_for_summary(summary: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only pending review tasks represented by the current poll summary.
+
+    A normal no-op poll must never drain the historical review queue. The
+    original summary (or its pending retry file) remains the notification
+    trigger; the durable task only confirms which current case may be marked
+    as notified after provider delivery.
+    """
+    briefings = [item for item in list(summary.get("briefings") or []) if isinstance(item, dict)]
+    if not briefings:
+        return []
+    task_ids = {str(item.get("task_id") or "") for item in briefings if str(item.get("task_id") or "")}
+    deal_ids = {str(item.get("deal_id") or "") for item in briefings if str(item.get("deal_id") or "")}
+    operation_ids = {
+        str(item.get("correlation_id") or "")
+        for item in briefings
+        if str(item.get("correlation_id") or "")
+    }
+    message_ids: set[str] = set()
+    for item in briefings:
+        draft = item.get("draft") if isinstance(item.get("draft"), dict) else {}
+        for value in (item.get("message_id"), draft.get("source_message_id")):
+            if str(value or "").strip():
+                message_ids.add(str(value).strip())
+
+    selected: list[dict[str, Any]] = []
+    for task in tasks:
+        if str(task.get("notification_status") or "pending") != "pending":
+            continue
+        source_key = str(task.get("source_key") or "")
+        if (
+            str(task.get("task_id") or "") in task_ids
+            or str(task.get("deal_id") or "") in deal_ids
+            or str(task.get("operation_id") or "") in operation_ids
+            or any(source_key == message_id or source_key.endswith(f":{message_id}") for message_id in message_ids)
+        ):
+            selected.append(task)
+    return selected
 
 
 def _notification_key(event_keys: list[str], subject: str) -> str:
@@ -593,6 +676,16 @@ def deliver_notification(
             if not isinstance(response_data, dict):
                 response_data = {}
             external_message_id = str(response_data.get("messageId") or "")
+            if not external_message_id:
+                _save_delivery_state(path, state)
+                return {
+                    "status": "outcome_unknown",
+                    "event_keys": [event_key],
+                    "sent_event_keys": sent_keys,
+                    "recipient": recipient,
+                    "status_code": status_code,
+                    "response": {"error": "provider_message_id_missing"},
+                }
             delivered_at = datetime.now(timezone.utc).isoformat()
             state["events"][event_key].update({
                 "status": "delivered",
@@ -737,20 +830,34 @@ def main() -> int:
     parser.add_argument("--env-file", default=DEFAULT_ENV_FILE)
     parser.add_argument("--recipient", default=DEFAULT_RECIPIENT)
     parser.add_argument("--state-file", default=DEFAULT_DELIVERY_STATE_FILE)
+    parser.add_argument("--registry-file", default=DEFAULT_REGISTRY_FILE)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     recipient = validate_internal_recipient(args.recipient)
     path = Path(args.summary_json)
     summary = json.loads(path.read_text(encoding="utf-8"))
+    registry: UnifiedLeadRegistry | None = None
+    review_tasks: list[dict[str, Any]] = []
+    try:
+        registry = UnifiedLeadRegistry(args.registry_file)
+        review_tasks = review_tasks_for_summary(summary, registry.review_tasks())
+    except Exception:
+        if registry is not None:
+            registry.close()
+        registry = None
     built_events = build_notifications(summary)
     if not built_events:
+        if registry is not None:
+            registry.close()
         return 0
     if args.dry_run:
         print(json.dumps([
             {"subject": subject, "recipient": recipient, "text": text}
             for _event_key, _briefing, subject, text in built_events
         ], ensure_ascii=False, indent=2))
+        if registry is not None:
+            registry.close()
         return 0
     email_result = deliver_notification(
         summary,
@@ -769,6 +876,7 @@ def main() -> int:
         print(f"Orchesta RFQ email notify: pominięto duplikat do {recipient}")
     elif email_result["status"] == "outcome_unknown":
         print("Orchesta RFQ email notify: wynik wcześniejszej próby jest niepewny; nie ponowiono wysyłki, aby uniknąć duplikatu")
+        failed = True
     elif email_result["status"] == "sent":
         print(f"Orchesta RFQ email notify: wysłano powiadomienie do {recipient}")
     if telegram_result["status"] == "failed":
@@ -776,10 +884,23 @@ def main() -> int:
         failed = True
     elif telegram_result["status"] == "outcome_unknown":
         print("Orchesta RFQ Telegram notify: wynik wcześniejszej próby jest niepewny; nie ponowiono wysyłki")
+        failed = True
     elif telegram_result["status"] == "already_delivered":
         print("Orchesta RFQ Telegram notify: pominięto duplikat")
     elif telegram_result["status"] == "sent":
         print(f"Orchesta RFQ Telegram notify: wysłano {telegram_result.get('sent_count', 0)} osobnych powiadomień")
+    if registry is not None:
+        if email_result.get("status") in {"sent", "already_delivered"} or telegram_result.get("status") in {"sent", "already_delivered"}:
+            for task in review_tasks:
+                registry.mark_review_task_notified(
+                    str(task.get("task_id") or ""),
+                    channel="internal_notifier",
+                    provider_evidence={
+                        "email_status": email_result.get("status"),
+                        "telegram_status": telegram_result.get("status"),
+                    },
+                )
+        registry.close()
     return 1 if failed else 0
 
 

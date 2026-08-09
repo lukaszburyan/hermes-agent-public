@@ -2,6 +2,10 @@
 
 Public, sanitized source snapshot of Hermes Agent and its RFQ automation.
 
+Current public snapshot: `v0.18.0-rc12` (sanitized from the production source
+tree on 2026-08-09). Private deployment reports, runtime identifiers and
+operational evidence are not part of this repository.
+
 The repository contains the application code, tests, reusable skills, example
 tenant configuration, Docker/Systemd templates, migration tooling and safety
 controls. Operational reports, production endpoints, real contact addresses,
@@ -34,3 +38,5 @@ file.
 
 This repository starts with a fresh root commit. It does not inherit the Git
 history, release reports or deployment evidence of any private environment.
+Subsequent updates are published as sanitized snapshot commits and never import
+the private repository's Git history.

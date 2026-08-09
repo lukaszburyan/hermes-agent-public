@@ -136,7 +136,7 @@ Tell the user to add the public key at: **https://github.com/settings/keys**
 **Step 3: Test the connection**
 
 ```bash
-ssh -T identity-038@example.invalid
+ssh -T identity-022@customer-011.example.com
 # Expected: "Hi <username>! You've successfully authenticated..."
 ```
 
@@ -144,7 +144,7 @@ ssh -T identity-038@example.invalid
 
 ```bash
 # Rewrite HTTPS GitHub URLs to SSH automatically
-git config --global url."identity-038@example.invalid:".insteadOf "https://github.com/"
+git config --global url."identity-022@customer-011.example.com:".insteadOf "https://github.com/"
 ```
 
 **Step 5: Configure git identity**

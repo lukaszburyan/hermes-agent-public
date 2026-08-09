@@ -53,10 +53,10 @@ import urllib.parse
 import urllib.request
 from email.header import decode_header, make_header
 from email.parser import Parser
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from html import unescape
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 EXECUTION_DIR = Path(__file__).resolve().parent
 ROOT_DIR = EXECUTION_DIR.parent
@@ -74,6 +74,7 @@ from send_reconciliation import (  # noqa: E402
     DEFAULT_MAX_AGE_SECONDS as DEFAULT_SEND_RECONCILE_MAX_AGE_SECONDS,
     append_marker as append_customer_send_marker,
     build_send_marker as customer_send_marker,
+    marker_matches_content,
     operation_age_seconds,
     reconcile_sent_rows,
 )
@@ -99,6 +100,7 @@ from message_policy import (  # noqa: E402
     operational_autosend_enabled,
     operational_type_for_flow,
 )
+from restore_gate import assert_restore_reconciled  # noqa: E402
 
 # Rebuilt LLM pipeline — contextual follow-ups for existing_thread_reply
 # (conversation continuity). Imports are guarded so the poller still runs when
@@ -219,7 +221,13 @@ def make_llm_followup_body_generator(
         approved_action = "ask_discovery_questions"
         llm_client = _get_llm_client()
         last_error: Exception | None = None
-        for _attempt in range(2):
+        previous_body = ""
+        previous_errors: list[str] = []
+        previous_spans: list[dict[str, Any]] = []
+        operation_id = str(context.get("operation_id") or f"response:{context.get('source_key') or deal_id}")
+        from reply_contract import REPLY_CONTRACT_DIGEST
+        from reply_sanitizer import sanitize_reply
+        for attempt_number in (1, 2):
             try:
                 outcome = _lrw.write_reply(
                     approved_action=approved_action,
@@ -232,8 +240,18 @@ def make_llm_followup_body_generator(
                     is_first_agent_reply=False,
                     llm_client=llm_client,
                     run_id=run_id,
+                    repair_context=(
+                        {
+                            "previous_body": previous_body,
+                            "validation_error_codes": previous_errors,
+                            "offending_spans": previous_spans,
+                        }
+                        if attempt_number == 2 else None
+                    ),
                 )
-                body = str(outcome.get("body") or "").strip()
+                raw_body = str(outcome.get("body") or "").strip()
+                sanitized = sanitize_reply(raw_body, is_first_agent_reply=False)
+                body = str(sanitized.get("body") or "").strip()
                 if not body or outcome.get("needs_human_review"):
                     raise ReplyValidationError(str(outcome.get("review_reason") or "llm_write_failed"))
                 verdict = _rv.validate_reply(
@@ -244,8 +262,23 @@ def make_llm_followup_body_generator(
                     tenant_id=deal_tenant,
                     missing_data=missing_data,
                 )
+                errors = list(verdict.get("errors") or [])
+                unified_registry.record_validation_attempt(
+                    operation_id,
+                    deal_id=deal_id,
+                    attempt_number=attempt_number,
+                    prompt_version=str(outcome.get("prompt_version") or ""),
+                    contract_digest=REPLY_CONTRACT_DIGEST,
+                    body=body,
+                    error_codes=errors,
+                    offending_spans=list(sanitized.get("offending_spans") or []),
+                    sanitizer_actions=list(sanitized.get("actions") or []),
+                )
                 if not verdict.get("ok"):
-                    raise ReplyValidationError(",".join(verdict.get("errors", []) or ["validation_failed"]))
+                    previous_body = body
+                    previous_errors = errors or ["validation_failed"]
+                    previous_spans = list(sanitized.get("offending_spans") or [])
+                    raise ReplyValidationError(",".join(previous_errors))
                 return {
                     "body_text": body,
                     "generator": "llm_followup",
@@ -257,13 +290,30 @@ def make_llm_followup_body_generator(
                         if _tc.discovery_questions(deal_tenant, field)
                     ],
                     "assumptions": [],
-                    "safety_notes": ["no_price", "no_offer", "llm_validated", f"missing:{','.join(missing_data) or 'none'}"],
+                    "safety_notes": [
+                        "no_price", "no_offer", "llm_validated",
+                        f"sanitized:{','.join(sanitized.get('actions') or []) or 'none'}",
+                        f"missing:{','.join(missing_data) or 'none'}",
+                    ],
                     "validated": True,
                 }
             except Exception as exc:
                 last_error = exc
+                if attempt_number == 1 and previous_errors:
+                    continue
+                if attempt_number == 1 and not previous_errors:
+                    previous_errors = [f"llm_output_error:{exc.__class__.__name__}"]
+                    previous_body = previous_body or ""
+                    continue
         reason = f"reply_validation_failed_after_retry:{last_error.__class__.__name__}:{str(last_error)[:160]}"
-        unified_registry.mark_review(deal_id, reason)
+        if not unified_registry.finalize_response_attempt(
+            operation_id,
+            outcome="validation_failed",
+            reason_codes=[reason],
+            rejected_body=previous_body,
+            validation_errors=previous_errors or [reason],
+        ):
+            unified_registry.mark_review(deal_id, reason)
         raise ReplyValidationError(reason)
 
     return _gen
@@ -399,7 +449,7 @@ POLISH_NUMBER_WORDS = {
     "piec": 5,
     "pięć": 5,
 }
-OWN_SIGNATURE_NAMES = {"Orchesta RFQ Team", "Orchesta RFQ Team"}
+OWN_SIGNATURE_NAMES = {"Łukasz Buryan", "Orchesta RFQ Team"}
 AUTOTEST_SUBJECT_RE = re.compile(r"HRFQ-AUTO-\d{8}-\d{6}-[A-Z]")
 # Customers commonly answer in lists. The marker must be dropped before any
 # numeric fact extraction, otherwise "3. skrzynek: 12" reads as 3 mailboxes.
@@ -478,11 +528,51 @@ def parse_rfc_headers(header_content: str) -> dict[str, str]:
     except Exception:
         return {}
     headers: dict[str, str] = {}
-    for key in ("Message-ID", "Message-Id", "In-Reply-To", "References", "Auto-Submitted", "Precedence", "List-Unsubscribe"):
+    for key in (
+        "Message-ID", "Message-Id", "In-Reply-To", "References", "Reply-To", "From", "To", "Cc",
+        "Auto-Submitted", "Precedence", "List-Unsubscribe",
+    ):
         value = parsed.get(key)
         if value and key not in headers:
             headers[key] = str(value).strip()
     return headers
+
+
+def _header_addresses(value: str) -> list[str]:
+    addresses: list[str] = []
+    for _name, address in getaddresses([decode_mime_header_value(value)]):
+        normalized = normalize_registry_email(address)
+        if normalized and normalized not in addresses:
+            addresses.append(normalized)
+    return addresses
+
+
+def resolve_reply_recipient(envelope: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Resolve one reply recipient. Reply-all is deliberately unsupported."""
+    envelope_from = normalize_registry_email(str(envelope.get("from") or ""))
+    header_from = _header_addresses(str(headers.get("From") or ""))
+    reply_to = _header_addresses(str(headers.get("Reply-To") or ""))
+    to_addresses = _header_addresses(str(headers.get("To") or ""))
+    cc_addresses = _header_addresses(str(headers.get("Cc") or ""))
+    if len(header_from) > 1 or len(reply_to) > 1:
+        raise ValueError("ambiguous_reply_recipient_headers")
+    if header_from and envelope_from and header_from[0] != envelope_from:
+        raise ValueError("envelope_from_header_mismatch")
+    from_address = header_from[0] if header_from else envelope_from
+    recipient = reply_to[0] if reply_to else from_address
+    if not recipient:
+        raise ValueError("reply_recipient_not_resolved")
+    return {
+        "resolved_reply_recipient": recipient,
+        "evidence": {
+            "method": "reply_to" if reply_to else "from",
+            "reply_to": reply_to,
+            "from": [from_address] if from_address else [],
+            "to": to_addresses,
+            "cc": cc_addresses,
+            "reply_all": False,
+        },
+    }
 
 
 def rfc_message_id(headers: dict[str, str]) -> str:
@@ -547,6 +637,34 @@ def top_reply_text(text: str, max_chars: int = 5000) -> str:
         maxsplit=1,
     )[0]
     return cleaned.strip()[:max_chars]
+
+
+def split_message_parts(text: str, max_chars: int = 8000) -> dict[str, str]:
+    """Separate current customer text, quoted history and trailing signature."""
+    full = str(text or "")[:max_chars]
+    newest_with_signature = top_reply_text(full, max_chars=max_chars)
+    signature = ""
+    newest = newest_with_signature
+    signature_match = re.search(
+        r"(?im)^\s*(?:--\s*$|pozdrawiam(?: serdecznie)?[,!]?\s*$|z poważaniem[,!]?\s*$|"
+        r"regards[,!]?\s*$|best regards[,!]?\s*$|kind regards[,!]?\s*$|"
+        r"mit freundlichen grüßen[,!]?\s*$)",
+        newest_with_signature,
+    )
+    if signature_match:
+        newest = newest_with_signature[:signature_match.start()].strip()
+        signature = newest_with_signature[signature_match.start():].strip()
+    quoted = ""
+    if newest_with_signature and newest_with_signature in full:
+        tail = full.split(newest_with_signature, 1)[1].strip()
+        if tail:
+            quoted = tail
+    return {
+        "newest_customer_text": newest,
+        "quoted_history": quoted[:max_chars],
+        "signature": signature[:2000],
+        "newest_with_signature": newest_with_signature,
+    }
 
 
 def first_text_match(patterns: tuple[str, ...], text: str) -> str:
@@ -1266,14 +1384,47 @@ def build_final_offer_input(
     }
 
 
-def _boolean_fact_state(value: bool | None, *, contradictory: bool = False) -> dict[str, Any]:
+def _boolean_fact_state(
+    value: bool | None,
+    *,
+    contradictory: bool = False,
+    unknown_state: str = "not_asked",
+) -> dict[str, Any]:
     if contradictory:
         return {"state": "conflicting"}
     if value is True:
-        return {"state": "yes", "value": True}
+        return {"state": "known", "value": True}
     if value is False:
-        return {"state": "no", "value": False}
-    return {"state": "unknown"}
+        return {"state": "known", "value": False}
+    return {"state": unknown_state}
+
+
+def _unknown_confirmed_for(text: str, keywords: tuple[str, ...]) -> bool:
+    """True only when the customer declares that a fact is not known yet."""
+    normalized = _normalize_polish(declarative_customer_text(text))
+    if not normalized or not any(re.search(keyword, normalized) for keyword in keywords):
+        return False
+    uncertainty = (
+        r"\b(?:nie wiemy|nie znamy|nie mamy|jeszcze nie wiemy|brak)\b.{0,180}"
+        r"(?:decyzj|informacj|ustalen|wiedz|danych|liczb|wolumen|crm|skrzyn|kont)",
+        r"\b(?:do ustalenia|nieustalon|nie jest ustalon|nie zostal ustalon)\w*\b.{0,120}"
+        r"(?:crm|liczb|wolumen|skrzyn|kont)",
+    )
+    return any(re.search(pattern, normalized, flags=re.DOTALL) for pattern in uncertainty)
+
+
+def extract_monthly_volume(text: str) -> int | None:
+    declarative = _normalize_polish(declarative_customer_text(text))
+    patterns = (
+        r"\b(\d{1,6})\s*(?:zapyt\w*|rfq|wiadom\w*)\s*(?:miesiecznie|na miesiac|/\s*miesiac)\b",
+        r"\b(?:miesieczn\w*\s+wolumen|wolumen\s+miesieczn\w*)\s*[:\-–]?\s*(\d{1,6})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, declarative)
+        if match:
+            value = int(match.group(1))
+            return value if value > 0 else None
+    return None
 
 
 def known_offer_facts(text: str, envelope: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
@@ -1284,19 +1435,32 @@ def known_offer_facts(text: str, envelope: dict[str, Any] | None = None) -> dict
     crm_no = bool(re.search(r"\b(?:bez\s+crm|nie\s+(?:chcemy|potrzebujemy|korzystamy|uzywamy).{0,50}\bcrm\b|crm.{0,40}\bniepotrzeb)\b", normalized))
 
     mailbox_count = extract_mailbox_count(text)
+    monthly_volume = extract_monthly_volume(text)
     inquiry_source = extract_inquiry_source(text)
     sample_requests = extract_has_sample_requests(text, envelope.get("attachments") or [])
+    mailbox_unknown = _unknown_confirmed_for(text, (r"\bskrzyn\w*\b", r"\bkont\w*\b"))
+    crm_unknown = _unknown_confirmed_for(text, (r"\bcrm\b",))
+    volume_unknown = _unknown_confirmed_for(text, (r"\bwolumen\w*\b", r"\bmiesieczn\w*\b"))
     return {
         "mailbox_count": (
             {"state": "known", "value": mailbox_count}
             if mailbox_count is not None
-            else {"state": "unknown"}
+            else {"state": "unknown_confirmed" if mailbox_unknown else "not_asked"}
         ),
-        "crm": _boolean_fact_state(extract_crm_decision(text), contradictory=crm_yes and crm_no),
+        "crm": _boolean_fact_state(
+            extract_crm_decision(text),
+            contradictory=crm_yes and crm_no,
+            unknown_state="unknown_confirmed" if crm_unknown else "not_asked",
+        ),
+        "monthly_volume": (
+            {"state": "known", "value": monthly_volume}
+            if monthly_volume is not None
+            else {"state": "unknown_confirmed" if volume_unknown else "not_asked"}
+        ),
         "inquiry_source": (
             {"state": "known", "value": inquiry_source}
             if inquiry_source
-            else {"state": "unknown"}
+            else {"state": "not_asked"}
         ),
         "sample_requests": _boolean_fact_state(sample_requests),
     }
@@ -1458,6 +1622,35 @@ def decide_telegram_action(result: dict[str, Any], draft_action: str) -> str:
     return "notify_briefing_only"
 
 
+def fallback_business_outcome(
+    draft_action: str,
+    *,
+    operation_statuses: Iterable[str] = (),
+    gate_retry_scheduled: bool = False,
+) -> str:
+    """Choose a safe terminal outcome when no registry disposition exists.
+
+    Business decisions and approval waits are terminal for the inbound message.
+    Only a known, pre-provider technical failure may remain retryable. Unknown
+    provider outcomes are reconciled separately and are never sent again here.
+    """
+    action = str(draft_action or "").strip()
+    statuses = {str(status or "").strip() for status in operation_statuses}
+    if action in {"send_outcome_unknown", "send_reconcile_pending"} or "outcome_unknown" in statuses:
+        return "outcome_unknown"
+    if gate_retry_scheduled or statuses.intersection({"retryable_failed", "retry_scheduled"}):
+        return "retry_scheduled"
+    if action == "none":
+        return "terminal_discard"
+    return "manual_action_required"
+
+
+def manual_review_reason(draft_action: str, draft_error: str = "") -> str:
+    """Return a stable, human-action reason without exposing internal jargon."""
+    error = str(draft_error or "").strip()
+    return error or f"customer_message_requires_action:{str(draft_action or 'review_required')}"
+
+
 def extraction_highlight(extraction_summaries: list[dict[str, Any]]) -> str:
     """One short clause describing a useful attachment read, or '' if none."""
     for item in extraction_summaries or []:
@@ -1508,26 +1701,26 @@ def telegram_briefing(
     first = f"Masz wiadomosc od {sender} i {topic}"
 
     if draft_action == "created":
-        decision = "Utworzylem gotowy draft pierwszej odpowiedzi do Twojego review w tym samym watku, nic nie zostalo wyslane"
+        decision = "Przygotowałem szkic pierwszej odpowiedzi w tej samej rozmowie; nic nie zostało wysłane"
     elif draft_action == "sent":
         decision = "Wyslalem klientowi bezpieczna odpowiedz przedofertowa z pytaniami; finalnej oferty PDF nie wysylalem"
     elif draft_action == "auto_draft_failed":
-        decision = "Chcialem utworzyc draft odpowiedzi, ale sie nie udalo, wiec czeka na Twoja recze decyzje"
+        decision = "Nie udało mi się przygotować szkicu odpowiedzi, więc sprawa czeka na Twoją decyzję"
     elif draft_action == "would_create_pending_approval":
         if result["draft_kind"] == "final_offer":
-            decision = "Przygotowuje propozycje draftu oferty do review w tym samym watku, czeka na Twoje OK"
+            decision = "Mogę przygotować szkic oferty w tej samej rozmowie; czekam na Twoją decyzję"
         else:
-            decision = "Przygotowuje propozycje draftu odpowiedzi w tym samym watku, czeka na Twoje OK"
+            decision = "Mogę przygotować szkic odpowiedzi w tej samej rozmowie; czekam na Twoją decyzję"
     elif draft_action == "blocked_existing_draft_present":
-        decision = "Nie tworze kolejnego draftu, bo w tym watku juz istnieje draft w Zoho"
+        decision = "Nie tworzę kolejnego szkicu, bo jeden już istnieje w tej rozmowie"
     elif draft_action == "blocked_missing_thread_headers":
-        decision = "Nie tworze draftu, bo brakuje naglowkow watku do bezpiecznej odpowiedzi"
+        decision = "Nie tworzę szkicu, bo nie mogę bezpiecznie powiązać odpowiedzi z rozmową"
     elif draft_action == "blocked_low_confidence":
-        decision = "Nie tworze draftu, bo pewnosc klasyfikacji jest za niska"
+        decision = "Nie tworzę szkicu, bo wiadomość jest niejednoznaczna"
     elif result["telegram_only"]:
-        decision = "Nie tworze draftu do klienta i zostawiam to do Twojej decyzji"
+        decision = "Nie przygotowuję odpowiedzi do klienta i zostawiam sprawę do Twojej decyzji"
     else:
-        decision = "Nie tworze draftu, wystarczy briefing bez odpowiedzi do klienta"
+        decision = "Nie przygotowuję odpowiedzi do klienta; informuję Cię tylko o sprawie"
 
     # Optional third sentence: blocked attachments take priority over a useful
     # extraction highlight, so the message stays at 2-3 sentences.
@@ -1563,15 +1756,15 @@ def build_briefing(
     final_offer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_step = {
-        "created": "Draft odpowiedzi czeka w Wersjach roboczych Zoho; sprawdz, dopracuj i wyslij recznie.",
+        "created": "Szkic odpowiedzi czeka w wersjach roboczych; sprawdź go i zdecyduj o wysyłce.",
         "sent": "Hermes autonomicznie wyslal pierwsza odpowiedz z Zoho; monitoruj dalszy watek.",
         "already_sent_reconciled": "Wysylka zostala odnaleziona w Zoho Sent po identyfikatorze operacji; nie wysylaj jej ponownie.",
         "send_reconcile_pending": "Wynik wysylki jest uzgadniany z Zoho Sent; Hermes nie wysle duplikatu automatycznie.",
-        "auto_draft_failed": "Automatyczny draft sie nie powiodl; przygotuj odpowiedz recznie.",
-        "would_create_pending_approval": "Zatwierdz draft RFQ, aby zoho_reply_draft.py utworzyl reply-draft w tym samym watku.",
-        "blocked_existing_draft_present": "Sprawdz istniejacy draft w Wersjach roboczych; Hermes nie utworzyl duplikatu.",
+        "auto_draft_failed": "Nie udało się przygotować szkicu; sprawdź wiadomość i odpowiedz ręcznie.",
+        "would_create_pending_approval": "Sprawdź wiadomość klienta i zdecyduj, czy przygotować szkic odpowiedzi w tej rozmowie.",
+        "blocked_existing_draft_present": "Sprawdź istniejący szkic w wersjach roboczych; Hermes nie utworzył kopii.",
         "blocked_missing_thread_headers": "Sprawdz watek recznie; brak naglowkow do bezpiecznej odpowiedzi.",
-        "blocked_low_confidence": "Sprawdz wiadomosc recznie; klasyfikacja niepewna.",
+        "blocked_low_confidence": "Sprawdź wiadomość ręcznie, ponieważ jej znaczenie jest niejednoznaczne.",
         "final_offer_blocked": "Finalna oferta zablokowana; nic nie wyslano klientowi i sprawa wymaga kontroli.",
         "final_offer_failed": "Finalny draft oferty nie powstal przez blad runtime; sprawdz logi pollera.",
         "none": "Briefing tylko do wgladu; brak draftu do klienta.",
@@ -1949,17 +2142,16 @@ class HttpZohoClient:
 
 
 def select_account(accounts: list[dict[str, Any]], target_email: str) -> dict[str, Any]:
-    target = target_email.lower()
+    target = normalize_registry_email(target_email)
+    matches: list[dict[str, Any]] = []
     for account in accounts:
         for key in ("primaryEmailAddress", "mailboxAddress", "incomingUserName"):
-            if str(account.get(key, "")).lower() == target:
-                return account
-    for account in accounts:
-        if target in json.dumps(account, ensure_ascii=False).lower():
-            return account
-    if accounts:
-        return accounts[0]
-    raise RuntimeError("no Zoho account available")
+            if normalize_registry_email(str(account.get(key, ""))) == target:
+                matches.append(account)
+                break
+    if len(matches) != 1:
+        raise RuntimeError(f"zoho_account_resolution_failed:target={target}:matches={len(matches)}")
+    return matches[0]
 
 
 def account_id_of(account: dict[str, Any]) -> str:
@@ -1969,15 +2161,29 @@ def account_id_of(account: dict[str, Any]) -> str:
     raise RuntimeError("accountId not found")
 
 
-def select_folder(folders: list[dict[str, Any]], folder_name: str) -> dict[str, Any]:
-    want = folder_name.lower()
+def select_folder(folders: list[dict[str, Any]], folder_name: str, folder_id: str = "") -> dict[str, Any]:
+    configured_id = str(folder_id or os.environ.get("ZOHO_INBOX_FOLDER_ID") or "").strip()
+    if configured_id:
+        id_matches = [
+            folder for folder in folders
+            if str(folder.get("folderId") or folder.get("folder_id") or folder.get("id") or "") == configured_id
+        ]
+        if len(id_matches) != 1:
+            raise RuntimeError(f"zoho_inbox_resolution_failed:id={configured_id}:matches={len(id_matches)}")
+        return id_matches[0]
+    system_inbox = [folder for folder in folders if str(folder.get("folderType") or "").strip().lower() == "inbox"]
+    if len(system_inbox) == 1:
+        return system_inbox[0]
+    want = folder_name.strip().lower()
+    matches: list[dict[str, Any]] = []
     for folder in folders:
         for key in ("folderName", "folder_name", "displayName", "name"):
             if str(folder.get(key, "")).lower() == want:
-                return folder
-    if folders:
-        return folders[0]
-    raise RuntimeError(f"folder {folder_name} not found")
+                matches.append(folder)
+                break
+    if len(matches) != 1:
+        raise RuntimeError(f"zoho_inbox_resolution_failed:name={folder_name}:matches={len(matches)}")
+    return matches[0]
 
 
 def find_folder(folders: list[dict[str, Any]], folder_names: tuple[str, ...]) -> dict[str, Any] | None:
@@ -2248,7 +2454,7 @@ def check_sent_before_action(
         return {"allowed": False, "reason": "sent_guard_missing_correlation", "retryable": False}
 
     control = registry.automation_control(deal_id, account_id=account_id, thread_id=control_thread_id)
-    if control.get("state") == "paused":
+    if control.get("state") == "paused" and action_kind != "final_offer":
         return {"allowed": False, "reason": str(control.get("reason") or "paused"), "retryable": False}
 
     sent_folder = find_sent_folder(folders)
@@ -2300,13 +2506,41 @@ def check_sent_before_action(
                 metadata={"folder": "sent", "rfc_message_id": auto_rfc_id},
             )
             continue
+        final_artifact = registry.artifact(deal_id, "final_offer")
+        final_evidence = dict((final_artifact or {}).get("provider_evidence") or {})
+        final_marker = str(final_evidence.get("marker") or "")
+        pdf_hash = str(final_evidence.get("pdf_hash") or "")
+        sent_manually = False
+        if final_marker and pdf_hash:
+            try:
+                sent_content = str(client.get_content(account_id, sent_folder_id, sent_id) or "")
+            except Exception:
+                sent_content = ""
+            if marker_matches_content(final_marker, sent_content):
+                sent_manually = registry.record_manual_final_offer_sent(
+                    deal_id,
+                    external_message_id=sent_id,
+                    sent_at=occurred_at,
+                    marker=final_marker,
+                    pdf_hash=pdf_hash,
+                    recipient=customer_email,
+                    thread_id=control_thread_id,
+                    evidence={
+                        "provider": "zoho", "sent_folder_id": sent_folder_id,
+                        "draft_id": str((final_artifact or {}).get("external_draft_id") or ""),
+                        "subject": str(sent.get("subject") or ""),
+                    },
+                )
         paused = registry.pause_automation(
             deal_id,
             account_id=account_id,
             thread_id=control_thread_id,
             reason="human_takeover",
             actor="sent_guard",
-            evidence={"message_id": sent_id, "thread_id": control_thread_id, "occurred_at": occurred_at},
+            evidence={
+                "message_id": sent_id, "thread_id": control_thread_id, "occurred_at": occurred_at,
+                "sent_manually": sent_manually,
+            },
         )
         # Record the human reply's RFC Message-ID so a later customer reply that
         # references it (In-Reply-To/References) can anchor to this deal instead
@@ -2318,12 +2552,22 @@ def check_sent_before_action(
             thread_id=control_thread_id,
             message_id=sent_id,
             direction="outbound",
-            origin="human_or_unknown",
+            origin="human_final_offer" if sent_manually else "human_or_unknown",
             occurred_at=occurred_at,
             metadata={"folder": "sent", "rfc_message_id": human_rfc_id},
         )
-        return {"allowed": False, "reason": "human_takeover", "retryable": False, "control": paused}
+        return {
+            "allowed": False, "reason": "human_takeover", "retryable": False,
+            "control": paused, "sent_manually": sent_manually,
+        }
 
+    if control.get("state") == "paused":
+        return {
+            "allowed": False,
+            "reason": str(control.get("reason") or "paused"),
+            "retryable": False,
+            "control": control,
+        }
     return registry.evaluate_automation(
         deal_id,
         account_id=account_id,
@@ -3547,6 +3791,10 @@ def build_final_offer_creator(
                 draft_kind="final_offer",
                 attachments=[attachment_record],
             )
+            final_offer_marker = (
+                f"final-offer:{deal_id_value}:{manifest.get('offer_number') or envelope.get('message_id') or 'offer'}"
+            )
+            payload = append_customer_send_marker(payload, final_offer_marker)
             if pre_action_guard is not None:
                 gate = pre_action_guard()
                 if not gate.get("allowed"):
@@ -3621,6 +3869,8 @@ def build_final_offer_creator(
                 "pdf_attached": pdf_confirmed,
                 "pdf_removed": not pdf_path.exists(),
                 "attachment_confirmation": attachment_confirmation,
+                "final_offer_marker": final_offer_marker,
+                "pdf_sha256": local_checksum,
             }
 
     return creator
@@ -3651,6 +3901,7 @@ def poll(
     unified_registry: UnifiedLeadRegistry | None = None,
     run_id: str = "",
 ) -> dict[str, Any]:
+    assert_restore_reconciled()
     base_context = base_context or {}
     controlled_source_message_id = str(controlled_source_message_id or "").strip()
     controlled_sender = address_only(str(controlled_sender or "")).strip().lower()
@@ -3674,11 +3925,20 @@ def poll(
     auto_draft_classes = auto_draft_classes or set(DEFAULT_AUTO_DRAFT_CLASSES)
     auto_send_classes = auto_send_classes or set(DEFAULT_AUTO_SEND_CLASSES)
     accounts = client.list_accounts()
-    account = select_account(accounts, target_email)
-    account_id = account_id_of(account)
-    folders = client.list_folders(account_id)
-    folder = select_folder(folders, folder_name)
-    folder_id = folder_id_of(folder)
+    try:
+        account = select_account(accounts, target_email)
+        account_id = account_id_of(account)
+        folders = client.list_folders(account_id)
+        folder = select_folder(folders, folder_name)
+        folder_id = folder_id_of(folder)
+    except Exception as exc:
+        if unified_registry is not None:
+            unified_registry.record_security_event(
+                "zoho_account_folder_mismatch",
+                severity="critical",
+                details={"target_email": target_email, "folder_name": folder_name, "error": str(exc)[:300]},
+            )
+        raise
 
     raw_messages = client.list_messages(account_id, folder_id, limit)
 
@@ -3785,6 +4045,7 @@ def poll(
                     "classification": pre["precheck_class"],
                     "confidence": "high",
                     "wake_agent": False,
+                    "business_outcome": "terminal_discard",
                     "draft_action": "none",
                     "telegram_action": "none",
                     "precheck_reason": pre["precheck_reason"],
@@ -3846,10 +4107,53 @@ def poll(
                 "telegram_text": telegram_text,
                 "next_step": "Sprawdź dostępność Zoho i wiadomość ręcznie; Hermes nie wysłał odpowiedzi do klienta.",
             })
-            state.mark_processed(message_id, {"draft_action": "deferred_content_unavailable",
-                                              "detail": str(exc), "processed_run_id": summary["run_id"]})
+            state.mark_processed(message_id, {
+                "draft_action": "deferred_content_unavailable", "business_outcome": "retry_scheduled",
+                "detail": str(exc), "processed_run_id": summary["run_id"],
+            })
             continue
         headers = parse_rfc_headers(header_content)
+        full_body_text = html_to_text(content)
+        message_parts = split_message_parts(full_body_text)
+        try:
+            recipient_resolution = resolve_reply_recipient(envelope, headers)
+        except ValueError as exc:
+            summary["recipient_resolution_failed"] = summary.get("recipient_resolution_failed", 0) + 1
+            if unified_registry is not None:
+                registry_source_key = f"{account_id}:{message_id}" if account_id else message_id
+                held = unified_registry.register_event(
+                    source_type="mail",
+                    source_key=registry_source_key,
+                    email=str(envelope.get("from") or ""),
+                    company="",
+                    contact_name="",
+                    content=message_parts["newest_customer_text"],
+                    relation="reply" if headers.get("In-Reply-To") or headers.get("References") else "new",
+                    thread_id=str(envelope.get("thread_id") or ""),
+                    source_metadata={
+                        "provider": "zoho", "account_id": account_id, "source_message_id": message_id,
+                        "subject": str(envelope.get("subject") or ""),
+                        "recipient_resolution_error": str(exc),
+                    },
+                )
+                unified_registry.record_security_event(
+                    "recipient_resolution_failed", severity="critical", deal_id=str(held.get("deal_id") or ""),
+                    source_type="mail", source_key=registry_source_key, details={"error": str(exc)},
+                )
+                unified_registry.mark_review(str(held.get("deal_id") or ""), f"recipient_resolution_failed:{exc}")
+            state.mark_processed(
+                message_id,
+                {
+                    "draft_action": "manual_review", "business_outcome": "manual_action_required",
+                    "detail": str(exc), "processed_run_id": summary["run_id"],
+                },
+            )
+            continue
+        envelope["original_from"] = envelope.get("from", "")
+        envelope["from"] = recipient_resolution["resolved_reply_recipient"]
+        envelope["resolved_reply_recipient"] = recipient_resolution["resolved_reply_recipient"]
+        envelope["recipient_resolution_evidence"] = recipient_resolution["evidence"]
+        envelope["domain"] = domain_from_email(envelope["from"])
         rfc_id = rfc_message_id(headers)
         raw_attachments = client.get_attachment_info(account_id, folder_id, message_id) if envelope["has_attachment"] else []
         attachments = attachments_for_classifier(raw_attachments)
@@ -3859,7 +4163,7 @@ def poll(
             per_message_context = client.message_context(message_id) or {}
         context = {**base_context, **per_message_context}
 
-        body_text = html_to_text(content)
+        body_text = message_parts["newest_customer_text"]
         classifier_message = {
             "from": envelope["from"],
             "subject": envelope["subject"],
@@ -3892,7 +4196,7 @@ def poll(
                 envelope=envelope,
                 headers=headers,
                 result=result,
-                body_text=classifier_message["body"],
+                body_text=message_parts["newest_with_signature"],
                 thread_history_text="",
                 attachment_routes=attachment_routes,
                 raw_attachments=raw_attachments,
@@ -3933,6 +4237,10 @@ def poll(
                     "in_reply_to": str(headers.get("In-Reply-To") or ""),
                     "references": str(headers.get("References") or ""),
                     "subject": str(envelope.get("subject") or ""),
+                    "resolved_reply_recipient": str(envelope.get("resolved_reply_recipient") or ""),
+                    "recipient_resolution_evidence": dict(envelope.get("recipient_resolution_evidence") or {}),
+                    "quoted_history": message_parts["quoted_history"],
+                    "signature": message_parts["signature"],
                     "occurred_at": zoho_timestamp_iso(envelope.get("received_time")),
                 },
             )
@@ -4050,6 +4358,7 @@ def poll(
             has_thread_headers,
         )
         safety_gate: dict[str, Any] = {"allowed": True, "reason": "not_required"}
+        gate_retry_scheduled = False
         customer_action_enabled = bool(auto_send or auto_draft or auto_final_offer)
         # The initial gate may reuse a cache while the message is prepared, but
         # every customer-facing action performs a fresh Sent-folder read to
@@ -4108,8 +4417,10 @@ def poll(
             else:
                 draft_action = "blocked_conversation_handoff"
                 summary["conversation_handoffs"] += 1
-            if safety_gate.get("retryable") and schedule_gate_retry(state, message_id, safety_reason):
-                summary["gate_retries_scheduled"] += 1
+            if safety_gate.get("retryable"):
+                gate_retry_scheduled = schedule_gate_retry(state, message_id, safety_reason)
+                if gate_retry_scheduled:
+                    summary["gate_retries_scheduled"] += 1
             elif (
                 deal_id
                 and unified_registry is not None
@@ -4390,28 +4701,36 @@ def poll(
                     if send_result.get("action") == "sent":
                         sent_id = str(send_result.get("external_message_id") or "").strip()
                         if not sent_id:
-                            sent_id = "zoho-accepted:" + response_hash[:20]
-                        draft_action = "sent"
-                        ready_notice_completed = planned_message_type == READY_FOR_OFFER_NOTICE
-                        summary["responses_sent"] += 1
-                        if hasattr(state, "update_operation"):
-                            state.update_operation(message_id, "customer_send", "succeeded", external_draft_id=sent_id)
-                        if unified_registry is not None and deal_id:
-                            unified_registry.record_response(
-                                deal_id, response_stage, message_id=sent_id,
-                                content_hash=response_hash, operation_id=send_marker,
-                            )
-                            observe_automatic_outbound(
-                                registry=unified_registry,
-                                client=client,
-                                account_id=account_id,
-                                folders=folders,
-                                envelope=envelope,
-                                deal_id=deal_id,
-                                sent_id=sent_id,
-                                stage=response_stage,
-                                body_text=str(send_result.get("body_text") or ""),
-                            )
+                            draft_action = "send_outcome_unknown"
+                            draft_error = "provider_accept_without_message_id"
+                            summary["send_outcome_unknown"] += 1
+                            summary["send_reconcile_pending"] += 1
+                            if hasattr(state, "update_operation"):
+                                state.update_operation(
+                                    message_id, "customer_send", "outcome_unknown", last_error=draft_error,
+                                )
+                        else:
+                            draft_action = "sent"
+                            ready_notice_completed = planned_message_type == READY_FOR_OFFER_NOTICE
+                            summary["responses_sent"] += 1
+                            if hasattr(state, "update_operation"):
+                                state.update_operation(message_id, "customer_send", "succeeded", external_draft_id=sent_id)
+                            if unified_registry is not None and deal_id:
+                                unified_registry.record_response(
+                                    deal_id, response_stage, message_id=sent_id,
+                                    content_hash=response_hash, operation_id=send_marker,
+                                )
+                                observe_automatic_outbound(
+                                    registry=unified_registry,
+                                    client=client,
+                                    account_id=account_id,
+                                    folders=folders,
+                                    envelope=envelope,
+                                    deal_id=deal_id,
+                                    sent_id=sent_id,
+                                    stage=response_stage,
+                                    body_text=str(send_result.get("body_text") or ""),
+                                )
                     else:
                         draft_action = "auto_send_failed"
                         draft_error = str(
@@ -4707,6 +5026,10 @@ def poll(
                                         draft_id=created_id,
                                         price_net_display=str(final_offer_result.get("price_net_display") or ""),
                                         scope=str(final_offer_result.get("scope_display") or "zakres opisany w ofercie"),
+                                        pdf_hash=str(final_offer_result.get("pdf_sha256") or ""),
+                                        marker=str(final_offer_result.get("final_offer_marker") or ""),
+                                        recipient=str(envelope.get("from") or ""),
+                                        thread_id=str(envelope.get("thread_id") or ""),
                                     )
                                     deal_for_notice = unified_registry.get_deal(deal_id) or {}
                                     final_offer_telegram_text = (
@@ -4739,32 +5062,38 @@ def poll(
                         elif final_action == "awaiting_data_sent":
                             sent_id = str(final_offer_result.get("external_message_id") or "").strip()
                             if not sent_id:
-                                sent_id = "zoho-accepted:" + sha256_text({"message_id": message_id, "questions": final_offer_result.get("questions") or []})[:20]
-                            draft_action = "sent"
-                            summary["responses_sent"] += 1
-                            summary["final_offer_missing_data"] += 1
-                            if unified_registry is not None and deal_id:
-                                response_stage = f"missing_data:{message_id}"
-                                unified_registry.record_response(
-                                    deal_id,
-                                    response_stage,
-                                    message_id=sent_id,
-                                    content_hash=sha256_text({"message_id": message_id, "questions": final_offer_result.get("questions") or []}),
-                                    operation_id=f"missing-data:{message_id}",
-                                )
-                                observe_automatic_outbound(
-                                    registry=unified_registry,
-                                    client=client,
-                                    account_id=account_id,
-                                    folders=folders,
-                                    envelope=envelope,
-                                    deal_id=deal_id,
-                                    sent_id=sent_id,
-                                    stage=response_stage,
-                                    body_text=str(final_offer_result.get("body_text") or ""),
-                                )
-                            if hasattr(state, "update_operation"):
-                                state.update_operation(message_id, "offer_draft", "succeeded", external_draft_id=sent_id)
+                                draft_action = "send_outcome_unknown"
+                                draft_error = "provider_accept_without_message_id"
+                                summary["send_outcome_unknown"] += 1
+                                summary["send_reconcile_pending"] += 1
+                                if hasattr(state, "update_operation"):
+                                    state.update_operation(message_id, "offer_draft", "outcome_unknown", last_error=draft_error)
+                            else:
+                                draft_action = "sent"
+                                summary["responses_sent"] += 1
+                                summary["final_offer_missing_data"] += 1
+                                if unified_registry is not None and deal_id:
+                                    response_stage = f"missing_data:{message_id}"
+                                    unified_registry.record_response(
+                                        deal_id,
+                                        response_stage,
+                                        message_id=sent_id,
+                                        content_hash=sha256_text({"message_id": message_id, "questions": final_offer_result.get("questions") or []}),
+                                        operation_id=f"missing-data:{message_id}",
+                                    )
+                                    observe_automatic_outbound(
+                                        registry=unified_registry,
+                                        client=client,
+                                        account_id=account_id,
+                                        folders=folders,
+                                        envelope=envelope,
+                                        deal_id=deal_id,
+                                        sent_id=sent_id,
+                                        stage=response_stage,
+                                        body_text=str(final_offer_result.get("body_text") or ""),
+                                    )
+                                if hasattr(state, "update_operation"):
+                                    state.update_operation(message_id, "offer_draft", "succeeded", external_draft_id=sent_id)
                         elif final_action == "blocked":
                             draft_action = "final_offer_blocked"
                             draft_error = str(final_offer_result.get("error") or final_offer_result.get("status_name") or "final_offer_blocked")
@@ -4803,6 +5132,9 @@ def poll(
         # mention whether the attachment summary was actually used.
         telegram_action = decide_telegram_action(result, draft_action)
         telegram_text = final_offer_telegram_text or telegram_briefing(envelope, result, draft_action, attachment_routes, extraction_summaries)
+        if telegram_text and unified_registry is not None and deal_id:
+            telegram_case_id = unified_registry.get_rfq_id(deal_id) or unified_registry.assign_rfq_id(deal_id)
+            telegram_text = f"Sprawa {telegram_case_id}. {telegram_text}"
         telegram_sent = False
         if send_telegram is not None and telegram_action != "none" and telegram_text:
             try:
@@ -4850,6 +5182,41 @@ def poll(
             briefing["telegram_followup"] = followup
         summary["briefings"].append(briefing)
 
+        durable_disposition = (
+            unified_registry.source_disposition("mail", str(envelope.get("registry_source_key") or ""))
+            if unified_registry is not None and envelope.get("registry_source_key") else None
+        )
+        business_outcome = str((durable_disposition or {}).get("disposition") or "")
+        operation_statuses: list[str] = []
+        if not business_outcome and hasattr(state, "operation"):
+            for action_type, evidenced_outcome in (
+                ("customer_send", "customer_succeeded"),
+                ("offer_draft", "draft_verified"),
+                ("customer_draft", "draft_verified"),
+            ):
+                operation_evidence = state.operation(message_id, action_type) or {}
+                operation_statuses.append(str(operation_evidence.get("status") or ""))
+                external_id = str(operation_evidence.get("external_draft_id") or "").strip()
+                if operation_evidence.get("status") == "succeeded" and external_id:
+                    business_outcome = evidenced_outcome
+                    break
+        if not business_outcome:
+            business_outcome = fallback_business_outcome(
+                draft_action,
+                operation_statuses=operation_statuses,
+                gate_retry_scheduled=gate_retry_scheduled,
+            )
+            if business_outcome == "manual_action_required" and unified_registry is not None and deal_id:
+                unified_registry.mark_review(deal_id, manual_review_reason(draft_action, draft_error))
+                durable_disposition = unified_registry.source_disposition(
+                    "mail", str(envelope.get("registry_source_key") or "")
+                )
+                business_outcome = str((durable_disposition or {}).get("disposition") or business_outcome)
+        if business_outcome not in {
+            "customer_succeeded", "draft_verified", "terminal_discard", "manual_action_required",
+            "retry_scheduled", "outcome_unknown",
+        }:
+            business_outcome = "manual_action_required"
         state.mark_processed(
             message_id,
             {
@@ -4857,6 +5224,7 @@ def poll(
                 "confidence": result["confidence"],
                 "wake_agent": result["wake_agent"],
                 "draft_action": draft_action,
+                "business_outcome": business_outcome,
                 "telegram_action": telegram_action,
                 "runtime_mode": result["runtime_mode"],
                 "attachments_extracted": sum(1 for item in extraction_summaries if item.get("ok")),
@@ -4942,13 +5310,13 @@ def self_test() -> int:
     if intro_name.get("first_name") != "Piotr" or intro_name.get("last_name") != "Nowak":
         failures.append(f"customer name should come from sender introduction, got {intro_name}")
     english_intro_name = parse_customer_name(
-        "identity-003@example.invalid",
-        "identity-003@example.invalid",
+        "identity-001@gmail.com",
+        "identity-001@gmail.com",
         "Hi, this is John Miller from Northbridge Components Final Retest. We need RFQ tracking.",
     )
     if english_intro_name.get("first_name") != "John" or english_intro_name.get("last_name") != "Miller":
         failures.append(f"English customer name should come from introduction, got {english_intro_name}")
-    email_local_name = parse_customer_name("identity-009@example.invalid", "identity-009@example.invalid", "")
+    email_local_name = parse_customer_name("identity-005@gmail.com", "identity-005@gmail.com", "")
     if email_local_name.get("first_name") != "Piotr" or email_local_name.get("last_name") != "Nowak":
         failures.append(f"safe first.last email local should expose name, got {email_local_name}")
     local_only_name = parse_customer_name("notifications@example.invalid", "notifications@example.invalid", "")
@@ -5005,7 +5373,7 @@ def self_test() -> int:
             {
                 "messageId": "m-rfq-english",
                 "folderId": "inbox-1",
-                "fromAddress": "identity-003@example.invalid",
+                "fromAddress": "identity-001@gmail.com",
                 "subject": "[HRFQ-AUTO-20260707-120000-Z-BA] RFQ English",
             },
             default_folder_id="inbox-1",
@@ -5085,14 +5453,14 @@ def self_test() -> int:
     edge_missing_only_crm = {
         "id": "edge-f",
         "message": {
-            "from": "identity-003@example.invalid",
+            "from": "identity-001@gmail.com",
             "subject": "[edge-F] Brakuje tylko decyzji CRM",
             "body": (
                 "Dzien dobry, pisze Karolina Baran z Orion Test. "
                 "System ma sledzic 1 konto pocztowe. "
                 "Zapytania przychodza mailowo. Mamy przykladowe zapytania."
             ),
-            "headers": {"Message-ID": "<identity-010@example.invalid>"},
+            "headers": {"Message-ID": "<identity-006@gmail.com>"},
             "attachments": [],
         },
         "context": {"mac_bridge_available": False},
@@ -5124,7 +5492,7 @@ def self_test() -> int:
                 "hasAttachment": "0",
                 "receivedTime": "200",
                 "_content": "<p>1 konto pocztowe.</p>",
-                "_header": "Message-ID: <identity-011@example.invalid>\nIn-Reply-To: <identity-012@example.invalid>\n",
+                "_header": "Message-ID: <identity-007@gmail.com>\nIn-Reply-To: <identity-008@gmail.com>\n",
             },
             {
                 "messageId": "hist-prev",
@@ -5135,7 +5503,7 @@ def self_test() -> int:
                 "hasAttachment": "0",
                 "receivedTime": "100",
                 "_content": "<p>Firma: ACME<br>--<br>Piotr Nowak</p>",
-                "_header": "Message-ID: <identity-012@example.invalid>\n",
+                "_header": "Message-ID: <identity-008@gmail.com>\n",
             },
         ],
     }
@@ -5150,7 +5518,7 @@ def self_test() -> int:
     )
     history_offer_input = build_final_offer_input(
         envelope=current_envelope,
-        headers={"Message-ID": "<identity-011@example.invalid>"},
+        headers={"Message-ID": "<identity-007@gmail.com>"},
         result={"classification": "existing_thread_reply", "confidence": "high"},
         body_text="1 konto pocztowe.",
         thread_history_text=history_text,
@@ -5174,7 +5542,7 @@ def self_test() -> int:
                 "hasAttachment": "0",
                 "receivedTime": "200",
                 "_content": "<p>1 konto pocztowe.</p>",
-                "_header": "Message-ID: <identity-013@example.invalid>\nIn-Reply-To: <identity-014@example.invalid>\nReferences: <identity-014@example.invalid>\n",
+                "_header": "Message-ID: <identity-009@gmail.com>\nIn-Reply-To: <identity-010@gmail.com>\nReferences: <identity-010@gmail.com>\n",
             },
             {
                 "messageId": "ref-prev",
@@ -5185,7 +5553,7 @@ def self_test() -> int:
                 "hasAttachment": "0",
                 "receivedTime": "100",
                 "_content": "<p>Firma: ACME<br>--<br>Piotr Nowak</p>",
-                "_header": "Message-ID: <identity-014@example.invalid>\n",
+                "_header": "Message-ID: <identity-010@gmail.com>\n",
             },
         ],
     }
@@ -5197,7 +5565,7 @@ def self_test() -> int:
         "inbox-1",
         reference_history_dataset["messages"],
         reference_current,
-        headers={"Message-ID": "<identity-013@example.invalid>", "In-Reply-To": "<identity-014@example.invalid>", "References": "<identity-014@example.invalid>"},
+        headers={"Message-ID": "<identity-009@gmail.com>", "In-Reply-To": "<identity-010@gmail.com>", "References": "<identity-010@gmail.com>"},
     )
     if "Firma: ACME" not in reference_history:
         failures.append(f"reference-linked thread history should include previous sender mail: {reference_history!r}")
@@ -5256,16 +5624,22 @@ def self_test() -> int:
             if "\n" in text:
                 failures.append(f"{mid}: telegram briefing should be single-paragraph")
 
-        # Idempotency: a second poll over the same inbox does no new work.
+        # A business decision or approval wait is terminal for this inbound
+        # message. A scheduled poll must not classify it again or create another
+        # notification/review task; only explicit technical failures retry.
         client2 = FakeZohoClient(dataset)
         state2 = PipelineState(state_path)
         summary2 = poll(client2, state2, classifier, run_id="selftest-2")
         if summary2["woken"] != 0 or summary2["would_create"] != 0:
-            failures.append(f"second poll re-processed messages: {summary2['woken']} woken")
-        if summary2["already_processed"] != summary2["listed"]:
-            failures.append("second poll should treat all listed messages as already processed")
+            failures.append("terminal business decisions should not be planned again")
+        if summary2["already_processed"] != expected_listed:
+            failures.append("second poll should suppress all terminally handled messages")
         if client2.fetch_counts["content"] != 0:
-            failures.append("second poll fetched message bodies despite idempotent state")
+            failures.append("second poll fetched content for terminal messages")
+        if summary2["drafts_created"] != 0 or summary2["responses_sent"] != 0:
+            failures.append("second poll produced a customer-facing side effect")
+        if summary2["briefings"]:
+            failures.append("second poll duplicated terminal business notifications")
 
         autotest_dataset = {
             "accounts": dataset["accounts"],
@@ -5280,7 +5654,7 @@ def self_test() -> int:
                     "hasAttachment": "0",
                     "receivedTime": "1750000500000",
                     "_content": "<p>System pierwszej odpowiedzi dla zapytań o wycenę.</p>",
-                    "_header": "Message-ID: <identity-015@example.invalid>\n",
+                    "_header": "Message-ID: <identity-011@gmail.com>\n",
                 }
             ],
         }
@@ -5390,7 +5764,7 @@ def self_test() -> int:
                     "messageId": "m-final-offer-ready",
                     "folderId": "inbox-1",
                     "threadId": "thread-final-1",
-                    "fromAddress": "Tomasz Nowak <identity-016@example.invalid>",
+                    "fromAddress": "Tomasz Nowak <identity-005@customer-005.example.com>",
                     "subject": "Re: Zapytanie o wycenę Orchesta RFQ",
                     "hasAttachment": "0",
                     "receivedTime": "1750001000000",
@@ -5400,9 +5774,9 @@ def self_test() -> int:
                         "Zapytania trafiają przez mail. Mamy przykładowe zapytania.</p>"
                     ),
                     "_header": (
-                        "Message-ID: <identity-017@example.invalid>\n"
-                        "In-Reply-To: <identity-018@example.invalid>\n"
-                        "References: <identity-018@example.invalid>\n"
+                        "Message-ID: <identity-006@customer-005.example.com>\n"
+                        "In-Reply-To: <identity-007@customer-005.example.com>\n"
+                        "References: <identity-007@customer-005.example.com>\n"
                     ),
                     "_attachmentinfo": [],
                 }
@@ -5486,7 +5860,7 @@ def self_test() -> int:
                         "Zakres: 4 konta pocztowe, bez CRM. "
                         "Zrodlo zapytan: mail. Mamy przykladowe zapytania.</p>"
                     ),
-                    "_header": "Message-ID: <identity-019@example.invalid>\n",
+                    "_header": "Message-ID: <identity-012@gmail.com>\n",
                     "_attachmentinfo": [],
                 }
             ],
@@ -5553,7 +5927,7 @@ def self_test() -> int:
                 "folderId": "drafts-1",
                 "threadId": "m-rfq-thread",
                 "fromAddress": DEFAULT_TARGET_EMAIL,
-                "toAddress": "identity-020@example.invalid",
+                "toAddress": "identity-008@customer-006.example.com",
                 "subject": "Re: Zapytanie ofertowe z formularza",
                 "hasAttachment": "0",
             }
@@ -5577,7 +5951,7 @@ def self_test() -> int:
         by_id4 = {b["message_id"]: b for b in summary4["briefings"]}
         if by_id4.get("m-rfq-thread", {}).get("draft", {}).get("action") != "blocked_existing_draft_present":
             failures.append("existing draft in thread did not block duplicate auto-draft")
-        if ("m-rfq-thread", "<identity-021@example.invalid>") in duplicate_draft_calls:
+        if ("m-rfq-thread", "<identity-009@customer-006.example.com>") in duplicate_draft_calls:
             failures.append("duplicate guard still called draft creator for an existing draft thread")
         if summary4["draft_duplicates_blocked"] != 1 or summary4["existing_drafts_in_threads"] != 1:
             failures.append(
@@ -5626,12 +6000,12 @@ def self_test() -> int:
             created = creator(
                 "acc-1",
                 {
-                    "from": "identity-022@example.invalid",
+                    "from": "identity-010@customer-007.example.com",
                     "subject": "Zapytanie ofertowe",
                     "message_id": "m-threaded",
                 },
                 {"classification": "new_quote_request", "confidence": "high", "draft_kind": "first_response"},
-                "<identity-023@example.invalid>",
+                "<identity-011@customer-007.example.com>",
                 "",
                 classifier_message={"body": "Proszę o ofertę."},
                 attachment_routes=[{"filename": "brief.pdf", "safety": "allow", "route": "pymupdf_text"}],
@@ -5639,7 +6013,7 @@ def self_test() -> int:
             )
             if created.get("action") != "created":
                 failures.append(f"LLM creator did not create draft payload: {created}")
-            if not posted_payloads or posted_payloads[0].get("inReplyTo") != "<identity-023@example.invalid>":
+            if not posted_payloads or posted_payloads[0].get("inReplyTo") != "<identity-011@customer-007.example.com>":
                 failures.append("LLM creator did not thread payload to inbound Message-ID")
             if created.get("draft_generation", {}).get("generator") != "fake_llm":
                 failures.append("LLM creator did not preserve generation metadata")
@@ -5767,7 +6141,11 @@ def configured_auto_send_classes() -> set[str]:
     raw = os.environ.get("HERMES_AUTO_SEND_CLASSES", "").strip()
     if not raw:
         return set(DEFAULT_AUTO_SEND_CLASSES)
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    configured = {item.strip() for item in raw.split(",") if item.strip()}
+    # Follow-ups are a durable operational type. A legacy class allowlist may
+    # narrow other classes, but must not recreate the non-terminal retry loop.
+    configured.add("existing_thread_reply")
+    return configured
 
 
 def main() -> int:

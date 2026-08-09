@@ -63,7 +63,7 @@ Then run `himalaya account configure <account>` to store the password.
 
 ```toml
 [accounts.gmail]
-email = "identity-035@example.invalid"
+email = "identity-013@gmail.com"
 display-name = "Your Name"
 default = true
 
@@ -71,7 +71,7 @@ backend.type = "imap"
 backend.host = "imap.gmail.com"
 backend.port = 993
 backend.encryption.type = "tls"
-backend.login = "identity-035@example.invalid"
+backend.login = "identity-013@gmail.com"
 backend.auth.type = "password"
 backend.auth.cmd = "pass show google/app-password"
 
@@ -79,7 +79,7 @@ message.send.backend.type = "smtp"
 message.send.backend.host = "smtp.gmail.com"
 message.send.backend.port = 587
 message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "identity-035@example.invalid"
+message.send.backend.login = "identity-013@gmail.com"
 message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show google/app-password"
 
@@ -100,14 +100,14 @@ folder.aliases.trash = "[Gmail]/Trash"
 
 ```toml
 [accounts.icloud]
-email = "identity-036@example.invalid"
+email = "identity-020@customer-009.example.com"
 display-name = "Your Name"
 
 backend.type = "imap"
 backend.host = "imap.mail.me.com"
 backend.port = 993
 backend.encryption.type = "tls"
-backend.login = "identity-036@example.invalid"
+backend.login = "identity-020@customer-009.example.com"
 backend.auth.type = "password"
 backend.auth.cmd = "pass show icloud/app-password"
 
@@ -115,7 +115,7 @@ message.send.backend.type = "smtp"
 message.send.backend.host = "smtp.mail.me.com"
 message.send.backend.port = 587
 message.send.backend.encryption.type = "start-tls"
-message.send.backend.login = "identity-036@example.invalid"
+message.send.backend.login = "identity-020@customer-009.example.com"
 message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show icloud/app-password"
 ```
@@ -169,7 +169,7 @@ default = true
 # ... backend config ...
 
 [accounts.work]
-email = "identity-037@example.invalid"
+email = "identity-021@customer-010.example.com"
 # ... backend config ...
 ```
 

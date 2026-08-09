@@ -174,8 +174,8 @@ def test_blocked_attachment_is_not_exposed_to_customer_composer():
 
 
 def test_questions_and_examples_do_not_become_declared_offer_facts():
-    assert mail.known_offer_facts("Czy system integruje się z CRM?")["crm"]["state"] == "unknown"
-    assert mail.known_offer_facts("Czy system obsłuży 10 skrzynek?")["mailbox_count"]["state"] == "unknown"
+    assert mail.known_offer_facts("Czy system integruje się z CRM?")["crm"]["state"] == "not_asked"
+    assert mail.known_offer_facts("Czy system obsłuży 10 skrzynek?")["mailbox_count"]["state"] == "not_asked"
     assert mail.known_offer_facts("Mamy jedną skrzynkę.")["mailbox_count"] == {"state": "known", "value": 1}
 
 
@@ -209,10 +209,11 @@ def test_sheet_pre_offer_send_uses_intelligent_body_generator(monkeypatch: pytes
     monkeypatch.setattr(sheets, "HttpZohoClient", FakeClient)
     monkeypatch.setattr(sheets, "HttpPreOfferPoster", FakePoster)
     monkeypatch.setenv("HERMES_ALLOW_PRE_OFFER_SEND", "1")
+    monkeypatch.setenv("ZOHO_MAIL_ACCOUNT_EMAIL", "rfq-mailbox@example.invalid")
 
     lead = {
         "Imię": "Michał Kaczmarek",
-        "Email": "identity-115@example.invalid",
+        "Email": "identity-018@gmail.com",
         "Firma": "NovaLead Logistics Sp. z o.o.",
         "Wiadomość": (
             "Chcemy wdrożyć Orchesta RFQ do obsługi zapytań z maila i formularza. "
@@ -263,7 +264,7 @@ def test_sheet_pre_offer_send_uses_intelligent_body_generator(monkeypatch: pytes
     assert isinstance(context, dict)
     assert context["source_type"] == "google_sheets"
     assert context["company"] == "NovaLead Logistics Sp. z o.o."
-    assert context["known_facts"]["crm"]["state"] == "unknown"
+    assert context["known_facts"]["crm"]["state"] == "unknown_confirmed"
     payload_text = json.dumps(captured["payload"], ensure_ascii=False)
     assert "zgłoszeniem z kampanii" in payload_text
     assert "formularza kampanii" not in payload_text

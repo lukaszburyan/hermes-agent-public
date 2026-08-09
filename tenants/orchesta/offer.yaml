@@ -19,28 +19,41 @@ fields:
       - qualification
       - final_offer
     customer_visible: true
+    unknown_policy: clarify
 
   current_process:
     required_for:
       - qualification
     customer_visible: true
+    unknown_policy: optional
 
   inquiry_channels:
     required_for:
       - qualification
     customer_visible: true
+    unknown_policy: optional
 
   monthly_volume:
     required_for:
       - final_offer
     customer_visible: true
+    unknown_policy: optional
 
   mailbox_count:
     required_for:
       - final_offer
     customer_visible: true
+    unknown_policy: assume
+    default_value: 1
+    assumption_label: wariant startowy dla jednego konta pocztowego
 
   crm:
     required_for:
       - final_offer
     customer_visible: true
+    unknown_policy: optional_variant
+    default_value: false
+    assumption_label: CRM jako opcja do potwierdzenia
+    variant:
+      value: true
+      label: integracja CRM jako opcja dodatkowa

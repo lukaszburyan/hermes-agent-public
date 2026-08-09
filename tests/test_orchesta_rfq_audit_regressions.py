@@ -152,7 +152,7 @@ def test_google_sheets_form_lead_asks_questions_before_final_offer_after_reply()
     lead = {
         'Data': '2026-07-28',
         'Imię': 'Anna',
-        'Email': "anna.formularz" + "@" + "example.pl",
+        'Email': 'identity-096@customer-007.example.com',
         'Telefon': '+48 500 000 000',
         'Firma': 'Formularzowy Test Sp. z o.o.',
         'Wiadomość': 'Proszę o ofertę Orchesta RFQ. Zapytania wpadają przez formularz na Dysku Google i czasem mailem, ale nie wiem co jeszcze podać.',
@@ -182,13 +182,11 @@ def test_google_sheets_form_lead_asks_questions_before_final_offer_after_reply()
         'safety': safe_offer_safety(),
         'customer_expectations': safe_customer_expectations(),
     }
-    first_manifest = run_final_offer(initial_offer_input)
-    assert first_manifest['status'] == 'awaiting_data', first_manifest
-    assert first_manifest['questions'] == [
-        'Ile kont pocztowych ma śledzić system?',
-        'Czy uwzględnić integrację z CRM w ofercie?',
-    ], first_manifest
-    assert 'inwestycja' not in first_manifest['mail_missing_data'].lower()
+    pytest.importorskip('pypdf')
+    first_manifest = run_final_offer(initial_offer_input, '--render-pdf')
+    assert first_manifest['status'] == 'offer_draft_created', first_manifest
+    assert first_manifest['readiness']['status'] == 'ready_with_assumptions'
+    assert {item['field'] for item in first_manifest['assumptions']} == {'mailbox_count', 'crm'}
 
     completed_after_exchange = json.loads(json.dumps(initial_offer_input))
     completed_after_exchange['scope'].update({
@@ -197,7 +195,6 @@ def test_google_sheets_form_lead_asks_questions_before_final_offer_after_reply()
         'has_sample_requests': True,
     })
     completed_after_exchange['thread']['source_message_id'] = '<sheets-reply-2@hermes.local>'
-    pytest.importorskip('pypdf')
     final_manifest = run_final_offer(completed_after_exchange, '--render-pdf')
     assert final_manifest['status'] == 'offer_draft_created', final_manifest
     assert final_manifest['price_net'] > 0
@@ -214,10 +211,10 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
     initial_result = classifier.classify({
         'id': 'mail-conversation-initial',
         'message': {
-            'from': 'identity-123@example.invalid',
+            'from': 'identity-020@gmail.com',
             'subject': 'Oferta Orchesta RFQ',
             'body': initial_body,
-            'headers': {'Message-ID': '<identity-124@example.invalid>'},
+            'headers': {'Message-ID': '<identity-021@gmail.com>'},
             'attachments': [],
         },
         'context': {'mac_bridge_available': False},
@@ -228,42 +225,35 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
         'messageId': 'mail-initial',
         'folderId': 'inbox-1',
         'threadId': 'thread-mail-conversation',
-        'fromAddress': 'identity-123@example.invalid',
+        'fromAddress': 'identity-020@gmail.com',
         'subject': 'Oferta Orchesta RFQ',
     }, default_folder_id='inbox-1')
     initial_offer_input = poller.build_final_offer_input(
         envelope=initial_envelope,
-        headers={'Message-ID': '<identity-124@example.invalid>'},
+        headers={'Message-ID': '<identity-021@gmail.com>'},
         result=initial_result,
         body_text=initial_body,
         attachment_routes=[],
         raw_attachments=[],
         account_email='rfq-mailbox@example.invalid',
     )
-    first_manifest = run_final_offer(initial_offer_input)
-    assert first_manifest['status'] == 'awaiting_data', first_manifest
-    assert len(first_manifest['questions']) <= 2
-    assert 'Ile kont pocztowych ma śledzić system?' in first_manifest['questions']
+    pytest.importorskip('pypdf')
+    first_manifest = run_final_offer(initial_offer_input, '--render-pdf')
+    assert first_manifest['status'] == 'offer_draft_created', first_manifest
+    assert first_manifest['readiness']['status'] == 'ready_with_assumptions'
     assert initial_offer_input['client']['company'] == 'Mailowy Test Sp. z o.o.', initial_offer_input
-    assert any(
-        phrase in first_manifest['mail_missing_data']
-        for phrase in (
-            'Po tej odpowiedzi przygotuję ofertę.',
-            'Jak tylko odpowiesz, przygotuję ofertę.',
-        )
-    )
 
     reply_body = '2 konta pocztowe, CRM tak. Mamy przykładowe zapytania.'
     reply_envelope = poller.normalize_envelope({
         'messageId': 'mail-reply',
         'folderId': 'inbox-1',
         'threadId': 'thread-mail-conversation',
-        'fromAddress': 'identity-123@example.invalid',
+        'fromAddress': 'identity-020@gmail.com',
         'subject': 'Re: Oferta Orchesta RFQ',
     }, default_folder_id='inbox-1')
     completed_offer_input = poller.build_final_offer_input(
         envelope=reply_envelope,
-        headers={'Message-ID': '<identity-125@example.invalid>', 'In-Reply-To': '<identity-124@example.invalid>', 'References': '<identity-124@example.invalid>'},
+        headers={'Message-ID': '<identity-022@gmail.com>', 'In-Reply-To': '<identity-021@gmail.com>', 'References': '<identity-021@gmail.com>'},
         result={'classification': 'existing_thread_reply', 'confidence': 'high'},
         body_text=reply_body,
         thread_history_text=initial_body,
@@ -274,7 +264,6 @@ def test_mail_thread_asks_questions_then_creates_final_offer_after_reply():
     assert completed_offer_input['client']['company'] == 'Mailowy Test Sp. z o.o.', completed_offer_input
     assert completed_offer_input['scope']['mailbox_count'] == 2, completed_offer_input
     assert completed_offer_input['scope']['crm'] is True, completed_offer_input
-    pytest.importorskip('pypdf')
     final_manifest = run_final_offer(completed_offer_input, '--render-pdf')
     assert final_manifest['status'] == 'offer_draft_created', final_manifest
     assert final_manifest['pdf_validation']['ok'] is True, final_manifest['pdf_validation']

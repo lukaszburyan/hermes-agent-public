@@ -62,6 +62,9 @@ conversation.
   current stage (qualification vs final_offer).
 - `recommended_action`: your recommendation; the script makes the final
   decision.
+- The safety check contains the deterministic minimum risk. You may raise the
+  risk after reading context, but the script will never allow you to lower that
+  minimum.
 - `salutation_name`: customer first name if known, else "".
 - `salutation_form`: vocative-case greeting in the message language (e.g.
   "Panie Krzysztofie"), else "".

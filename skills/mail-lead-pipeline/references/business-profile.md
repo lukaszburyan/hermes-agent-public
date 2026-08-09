@@ -166,10 +166,11 @@ Avoid unsupported promises. If a claim is not in this file or in the message con
 Use this signature:
 
 ```text
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq
 ```
 
 Add `https://orchesta.eu/` only when the context naturally calls for it.

@@ -175,6 +175,7 @@ def test_base_security_override_keeps_hermes_dependency_metadata_consistent():
     assert node_overrides == {
         "brace-expansion": "5.0.9",
         "ip-address": "10.3.1",
+        "nanoid": "3.3.17",
         "undici": "7.29.0",
     }
     assert 'old = "\\\"cryptography==48.0.1\\\""' in dockerfile
@@ -182,6 +183,7 @@ def test_base_security_override_keeps_hermes_dependency_metadata_consistent():
     assert "uv pip check --python /opt/hermes/.venv/bin/python" in dockerfile
     assert "npm ci --prefix /opt/hermes-node-security" in dockerfile
     assert "npm pkg set overrides.brace-expansion=5.0.9" in dockerfile
+    assert "npm pkg set overrides.nanoid=3.3.17" in dockerfile
     assert "npm pkg set overrides.undici=7.29.0" in dockerfile
 
 

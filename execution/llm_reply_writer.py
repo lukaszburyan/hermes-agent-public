@@ -33,6 +33,7 @@ from hermes_rfq_core import REASON_LLM_REPLY_FAILED  # noqa: E402
 from llm_intent_classifier import FixtureLLMClient, GatewayLLMClient, LLMClient, _strip_json_fence  # noqa: E402
 from tenant_config import STATE_AWAITING_HUMAN  # noqa: E402
 import tenant_config  # noqa: E402
+from reply_contract import DEFAULT_REPLY_CONTRACT, REPLY_CONTRACT_DIGEST, REPLY_CONTRACT_VERSION  # noqa: E402
 
 PROMPTS_DIR = ROOT_DIR / "prompts"
 SCHEMAS_DIR = ROOT_DIR / "schemas"
@@ -43,7 +44,7 @@ LLM_REPLY_WRITER_ENABLED_FLAG = "HERMES_LLM_REPLY_WRITER_ENABLED"
 
 # Spec section 23: prompt version recorded with every reply decision so the
 # prompt file loaded in production is unambiguous and auditable.
-PROMPT_VERSION = "incoming-reply-v2"
+PROMPT_VERSION = f"incoming-reply-v3:{REPLY_CONTRACT_VERSION}:{REPLY_CONTRACT_DIGEST[:12]}"
 PROMPT_FILE = "prompts/incoming_mail_reply_system.md"
 
 CONVERSATION_STAGES = ("discovery", "qualification", "final_offer")
@@ -54,7 +55,8 @@ def is_enabled() -> bool:
 
 
 def load_system_prompt() -> str:
-    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8") if SYSTEM_PROMPT_PATH.exists() else ""
+    base = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8") if SYSTEM_PROMPT_PATH.exists() else ""
+    return base + DEFAULT_REPLY_CONTRACT.prompt_fragment()
 
 
 def load_schema() -> dict[str, Any]:
@@ -64,7 +66,10 @@ def load_schema() -> dict[str, Any]:
 def validate_reply(payload: dict[str, Any]) -> None:
     schema = load_schema()
     if schema:
-        jsonschema.validate(payload, schema)
+        normalized = dict(payload)
+        normalized.setdefault("contract_version", REPLY_CONTRACT_VERSION)
+        normalized.setdefault("message_language", "pl")
+        jsonschema.validate(normalized, schema)
 
 
 def reply_failed_outcome(*, run_id: str = "") -> dict[str, Any]:
@@ -92,6 +97,7 @@ def build_reply_payload(
     conversation_stage: str,
     tenant_id: str,
     is_first_agent_reply: bool,
+    repair_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the user-facing payload for the reply writer (spec section 12).
 
@@ -110,7 +116,9 @@ def build_reply_payload(
         for field in missing_list
         if tenant_config.discovery_questions(tenant_id, field, conversation.get("language", "pl"))
     }
-    return {
+    public_contract = DEFAULT_REPLY_CONTRACT.as_dict()
+    public_contract.pop("forbidden_terms", None)
+    payload = {
         "approved_action": approved_action,
         "customer_message": customer_message,
         "thread_history": thread_history,
@@ -125,7 +133,16 @@ def build_reply_payload(
         },
         "knowledge_fragment": knowledge_fragment,
         "is_first_agent_reply": bool(is_first_agent_reply),
+        "reply_contract": public_contract,
+        "reply_contract_digest": REPLY_CONTRACT_DIGEST,
     }
+    if repair_context:
+        payload["repair_context"] = dict(repair_context)
+        payload["repair_instruction"] = (
+            "Apply only the smallest repair needed for the exact validation errors. "
+            "Do not change facts, numbers, commercial meaning or the approved action."
+        )
+    return payload
 
 
 def write_reply(
@@ -140,6 +157,7 @@ def write_reply(
     is_first_agent_reply: bool,
     llm_client: LLMClient | None = None,
     run_id: str = "",
+    repair_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Author a reply. Returns the validated reply JSON + the approved action.
 
@@ -162,44 +180,44 @@ def write_reply(
         conversation_stage=conversation_stage,
         tenant_id=tenant_id,
         is_first_agent_reply=is_first_agent_reply,
+        repair_context=repair_context,
     )
     user_prompt = json.dumps(user_payload, ensure_ascii=False, indent=2)
 
-    last_error: str = ""
-    for attempt in (1, 2):
-        try:
-            if hasattr(client, "complete_structured"):
-                raw = client.complete_structured(
-                    system_prompt,
-                    user_prompt,
-                    response_schema=load_schema(),
-                    schema_name="incoming_mail_reply",
-                    mode="WRITE_REPLY",
-                    temperature=0.0,
-                )
-            else:
-                raw = client.complete(system_prompt, user_prompt, temperature=0.0)
-            parsed = json.loads(_strip_json_fence(raw))
-            # Normalize review_reason to None when absent/false.
-            if "review_reason" not in parsed or parsed.get("review_reason") is False:
-                parsed["review_reason"] = None
-            validate_reply(parsed)
-            return {
-                "reply": parsed,
-                "approved_action": approved_action,
-                "subject": parsed.get("subject", ""),
-                "body": parsed.get("body", ""),
-                "needs_human_review": bool(parsed.get("needs_human_review", False)),
-                "review_reason": parsed.get("review_reason"),
-                "run_id": run_id,
-                "attempts": attempt,
-                "prompt_version": PROMPT_VERSION,
-                "prompt_file": PROMPT_FILE,
-            }
-        except (json.JSONDecodeError, jsonschema.ValidationError, ValueError) as exc:
-            last_error = f"attempt {attempt}: {exc.__class__.__name__}: {exc}"
-            if attempt == 1:
-                continue
+    try:
+        if hasattr(client, "complete_structured"):
+            raw = client.complete_structured(
+                system_prompt,
+                user_prompt,
+                response_schema=load_schema(),
+                schema_name="incoming_mail_reply",
+                mode="REPAIR_REPLY" if repair_context else "WRITE_REPLY",
+                temperature=0.0,
+            )
+        else:
+            raw = client.complete(system_prompt, user_prompt, temperature=0.0)
+        parsed = json.loads(_strip_json_fence(raw))
+        if "review_reason" not in parsed or parsed.get("review_reason") is False:
+            parsed["review_reason"] = None
+        parsed.setdefault("contract_version", REPLY_CONTRACT_VERSION)
+        parsed.setdefault("message_language", str(user_payload["style_rules"]["language"] or "pl"))
+        validate_reply(parsed)
+        return {
+            "reply": parsed,
+            "approved_action": approved_action,
+            "subject": parsed.get("subject", ""),
+            "body": parsed.get("body", ""),
+            "needs_human_review": bool(parsed.get("needs_human_review", False)),
+            "review_reason": parsed.get("review_reason"),
+            "message_language": parsed.get("message_language"),
+            "contract_version": parsed.get("contract_version"),
+            "run_id": run_id,
+            "attempts": 1,
+            "prompt_version": PROMPT_VERSION,
+            "prompt_file": PROMPT_FILE,
+        }
+    except (json.JSONDecodeError, jsonschema.ValidationError, ValueError) as exc:
+        last_error = f"attempt 1: {exc.__class__.__name__}: {exc}"
     outcome = reply_failed_outcome(run_id=run_id)
     outcome["error"] = last_error
     return outcome

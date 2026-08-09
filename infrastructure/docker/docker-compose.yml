@@ -12,6 +12,8 @@ services:
     env_file:
       - ${HERMES_RUNTIME_ENV_FILE:-.env.example}
     environment:
+      HERMES_RELEASE_COMMIT: ${HERMES_RELEASE_COMMIT:?set HERMES_RELEASE_COMMIT to the tagged release commit}
+      HERMES_RELEASE_TAG: ${HERMES_RELEASE_TAG:?set HERMES_RELEASE_TAG to the tested release tag}
       HERMES_RELEASE_DIGEST: ${HERMES_RELEASE_DIGEST}
       HERMES_EXPECTED_SKILL_ROOT: /opt/hermes-release/app/skills
       HERMES_TRANSPORT_KILL_SWITCH: ${HERMES_TRANSPORT_KILL_SWITCH:-1}
@@ -22,7 +24,7 @@ services:
       OPENAI_API_KEY: ""
       ORCHESTA_RFQ_ALLOW_EXTERNAL_VISION: "0"
       ORCHESTA_RFQ_ALLOW_SCHEMA_MODEL: "0"
-      RCLONE_CONFIG: /run/secrets/rclone.conf
+      RCLONE_CONFIG: /run/secrets/rclone/rclone.conf
     tmpfs:
       - /opt/data:rw,nosuid,size=256m
     volumes:
@@ -42,6 +44,6 @@ services:
       - ${HERMES_RUNTIME_DIR:-./runtime}/rfq-runtime:/opt/data/rfq-runtime
       - /root/HermesVault:/root/HermesVault
       - /root/HermesVault:/HermesVault
-      - ${HERMES_RCLONE_CONFIG_FILE:-./runtime/rclone.conf}:/run/secrets/rclone.conf:ro
+      - ${HERMES_RCLONE_CONFIG_DIR:-./runtime/rclone}:/run/secrets/rclone
     security_opt:
       - no-new-privileges:true

@@ -2368,11 +2368,11 @@
     "expected_telegram_only": true,
     "expected_wake_agent": true,
     "message": {
-      "from": "identity-005@example.invalid",
+      "from": "identity-003@gmail.com",
       "subject": "Re: Orchesta RFQ",
       "body": "Odpisuję z prywatnego maila w sprawie oferty.",
       "headers": {
-        "In-Reply-To": "<identity-006@example.invalid>"
+        "In-Reply-To": "<identity-003@customer-003.example.com>"
       },
       "attachments": []
     },

@@ -42,10 +42,17 @@ DEFAULT_ACCOUNT_EMAIL = "rfq-mailbox@example.invalid"
 # the skill templates when the tenant has no override.
 REPO_ROOT = SKILL_DIR.parent.parent
 TENANTS_DIR = REPO_ROOT / "tenants"
+EXECUTION_DIR = REPO_ROOT / "execution"
+if str(EXECUTION_DIR) not in sys.path:
+    sys.path.insert(0, str(EXECUTION_DIR))
 
-FOOTER = """Orchesta RFQ Team
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq"""
+from offer_readiness import resolve_final_offer_scope  # noqa: E402
+
+FOOTER = """--
+Łukasz Buryan
+
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq"""
 
 BANNED_OUTPUT_PATTERNS = {
     "SMS": r"\bSMS\b",
@@ -65,7 +72,7 @@ REQUIRED_OUTPUT_PATTERNS = {
     "payment": r"p[łl]atno[śs][ćc].*100% z g[oó]ry|100% z g[oó]ry.*p[łl]atno[śs][ćc]",
     "implementation": r"wdro[żz]enie.*14 dni|14 dni.*wdro[żz]enie",
     "guarantee": r"14 dni.*gwarancj|gwarancj.*14 dni",
-    "footer": r"Orchesta RFQ Team",
+    "footer": r"Łukasz Buryan",
 }
 
 REQUIRED_SAFETY_KEYS = {
@@ -394,14 +401,9 @@ def validate_required_data(data: dict[str, Any]) -> list[str]:
     for field in (
         "client.company",
         "client.email",
-        "scope.mailbox_count",
-        "scope.crm",
     ):
         value = get_in(data, field)
-        if field in {"scope.crm"}:
-            if to_bool(value) is None:
-                missing.append(field)
-        elif is_blank(value):
+        if is_blank(value):
             missing.append(field)
 
     mailbox_count = get_in(data, "scope.mailbox_count")
@@ -417,6 +419,19 @@ def validate_required_data(data: dict[str, Any]) -> list[str]:
         missing.append("scope.inquiry_source")
 
     return sorted(set(missing))
+
+
+def apply_offer_readiness(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply only approved start variants and retain their provenance."""
+    resolved_data = deepcopy(data)
+    scope = dict(resolved_data.get("scope") or {})
+    readiness = resolve_final_offer_scope(scope)
+    scope.update(readiness.get("resolved_facts") or {})
+    scope["fact_states"] = readiness.get("fact_states") or {}
+    scope["assumptions"] = readiness.get("assumptions") or []
+    resolved_data["scope"] = scope
+    resolved_data["offer_readiness"] = readiness
+    return resolved_data, readiness
 
 
 def validate_safety(data: dict[str, Any], pricing_path: Path) -> list[str]:
@@ -524,7 +539,7 @@ def calculate_pricing(scope: dict[str, Any], pricing: dict[str, Any]) -> dict[st
         )
 
     total = sum(int(item["net_price"]) for item in line_items)
-    return {
+    result = {
         "currency": pricing.get("currency", "PLN"),
         "tax_mode": "net",
         "line_items": line_items,
@@ -533,6 +548,17 @@ def calculate_pricing(scope: dict[str, Any], pricing: dict[str, Any]) -> dict[st
         "pricing_source": str(DEFAULT_PRICING_PATH.relative_to(SKILL_DIR)),
         "pricing_id": pricing.get("pricing_id"),
     }
+    if str((scope.get("fact_states") or {}).get("crm", {}).get("state") or "") == "assumed":
+        result["optional_variants"] = [{
+            "name": pricing["crm_integration"]["name"],
+            "net_price": crm_price,
+            "net_display": format_pln(crm_price),
+            "total_if_selected": total + crm_price,
+            "total_if_selected_display": format_pln(total + crm_price),
+        }]
+    else:
+        result["optional_variants"] = []
+    return result
 
 
 def roi_context(data: dict[str, Any], pricing: dict[str, Any]) -> dict[str, str]:
@@ -540,7 +566,9 @@ def roi_context(data: dict[str, Any], pricing: dict[str, Any]) -> dict[str, str]
     hourly = int(defaults.get("hourly_cost_gross", 55))
     minutes_min = int(defaults.get("minutes_per_response_min", 30))
     minutes_max = int(defaults.get("minutes_per_response_max", 120))
-    provided = get_in(data, "scope.monthly_inquiries")
+    provided = get_in(data, "scope.monthly_volume")
+    if provided is None:
+        provided = get_in(data, "scope.monthly_inquiries")
     if provided is not None:
         try:
             monthly = int(provided)
@@ -584,7 +612,8 @@ def build_offer_context(data: dict[str, Any], pricing_file: dict[str, Any]) -> d
     scope["has_sample_requests"] = to_bool(scope.get("has_sample_requests"))
     scope["inquiry_source"] = str(scope.get("inquiry_source") or "unknown").strip()
     scope["mailbox_label"] = mailbox_label(scope["mailbox_count"])
-    scope["crm_label"] = "tak" if scope["crm"] else "nie"
+    crm_assumed = str((scope.get("fact_states") or {}).get("crm", {}).get("state") or "") == "assumed"
+    scope["crm_label"] = "opcja do potwierdzenia" if crm_assumed else ("tak" if scope["crm"] else "nie")
     scope["inquiry_source_label"] = inquiry_source_label(str(scope["inquiry_source"]))
     pricing = calculate_pricing(scope, pricing_file)
     pricing_version = str(pricing_file.get("pricing_id") or "unknown")
@@ -617,6 +646,8 @@ def build_offer_context(data: dict[str, Any], pricing_file: dict[str, Any]) -> d
         },
         "client": client,
         "scope": scope,
+        "readiness": deepcopy(data.get("offer_readiness") or {}),
+        "assumptions": deepcopy(scope.get("assumptions") or []),
         "pricing": pricing,
         "roi": roi_context(data, pricing_file),
         "footer": FOOTER,
@@ -1046,11 +1077,13 @@ def build_success_outputs(context: dict[str, Any]) -> dict[str, str]:
 
 
 def run(input_path: Path, output_dir: Path, args: argparse.Namespace) -> dict[str, Any]:
-    data = load_json(input_path)
+    data, readiness = apply_offer_readiness(load_json(input_path))
     pricing_path = Path(args.pricing).resolve() if args.pricing else DEFAULT_PRICING_PATH
     pricing = load_json(pricing_path)
     missing = validate_required_data(data)
     blocks = validate_safety(data, pricing_path)
+    blocks.extend(f"offer_fact_conflict.{field}" for field in readiness.get("blocking_fields") or [])
+    blocks = sorted(set(blocks))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if missing or blocks:
@@ -1058,7 +1091,7 @@ def run(input_path: Path, output_dir: Path, args: argparse.Namespace) -> dict[st
         if blocked.get("mail_missing_data"):
             (output_dir / "mail_missing_data.txt").write_text(blocked["mail_missing_data"], encoding="utf-8")
         (output_dir / "telegram_blocked.txt").write_text(blocked["telegram"], encoding="utf-8")
-        manifest = {"input": str(input_path), "output_dir": str(output_dir), **blocked}
+        manifest = {"input": str(input_path), "output_dir": str(output_dir), "readiness": readiness, **blocked}
         write_json(output_dir / "manifest.json", manifest)
         return manifest
 
@@ -1171,6 +1204,8 @@ def run(input_path: Path, output_dir: Path, args: argparse.Namespace) -> dict[st
         "mail_final_offer": str(output_dir / "mail_final_offer.txt"),
         "telegram": str(output_dir / "telegram_pdf_created.txt"),
         "obsidian": obsidian_paths,
+        "readiness": readiness,
+        "assumptions": context.get("assumptions") or [],
     }
     write_json(output_dir / "manifest.json", manifest)
     return manifest
@@ -1262,10 +1297,11 @@ def self_test() -> int:
 
     bad_data = sample_data(1, False)
     bad_data["scope"].pop("crm")
-    missing = validate_required_data(bad_data)
-    questions = missing_questions(missing, [])
-    if "scope.crm" not in missing or len(questions) > 2:
-        failures.append(f"missing-data question path failed: {missing} {questions}")
+    resolved_bad_data, bad_readiness = apply_offer_readiness(bad_data)
+    if validate_required_data(resolved_bad_data):
+        failures.append("unknown CRM should not block the approved base offer")
+    if not any(item.get("field") == "crm" for item in bad_readiness.get("assumptions") or []):
+        failures.append(f"unknown CRM should create an explicit optional variant: {bad_readiness}")
 
     minimum_data = sample_data(1, False)
     minimum_data["client"]["first_name"] = ""
@@ -1317,22 +1353,23 @@ def self_test() -> int:
     many_missing["client"]["company"] = ""
     many_missing["scope"].pop("mailbox_count")
     many_missing["scope"].pop("crm")
-    questions = missing_questions(validate_required_data(many_missing), [])
-    expected_questions = [
-        QUESTION_BY_FIELD["scope.mailbox_count"],
-        QUESTION_BY_FIELD["scope.crm"],
-    ]
+    resolved_many_missing, _ = apply_offer_readiness(many_missing)
+    questions = missing_questions(validate_required_data(resolved_many_missing), [])
+    expected_questions = [QUESTION_BY_FIELD["client.company"]]
     if questions != expected_questions:
-        failures.append(f"critical missing questions should be compact and ordered: {questions}")
+        failures.append(f"only true blockers should produce missing-data questions: {questions}")
+    if validate_required_data(resolved_many_missing) != ["client.company"]:
+        failures.append("missing company should remain the only clarification blocker")
 
     english_missing = sample_data(2, False)
     english_missing["client"]["first_name"] = "Olivia"
     english_missing["client"]["last_name"] = "Parker"
-    english_missing["client"]["company"] = "Meridian Quote Systems Ultra Test"
+    english_missing["client"]["company"] = ""
     english_missing["language"] = "en"
     english_missing["scope"].pop("mailbox_count")
+    english_missing, _ = apply_offer_readiness(english_missing)
     english_blocked = build_blocked_outputs(english_missing, validate_required_data(english_missing), [])
-    if english_blocked["questions"] != [QUESTION_BY_FIELD_EN["scope.mailbox_count"]]:
+    if english_blocked["questions"] != [QUESTION_BY_FIELD_EN["client.company"]]:
         failures.append(f"English missing-data questions should be localized: {english_blocked['questions']}")
     if not english_blocked["mail_missing_data"].startswith("Hello Olivia,"):
         failures.append("English missing-data email should use an English salutation")

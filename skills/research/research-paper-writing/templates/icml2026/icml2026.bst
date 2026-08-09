@@ -13,7 +13,7 @@
 %% Max-Planck-Str. 2
 %% D-37191 Katlenburg-Lindau
 %% Germany
-%% E-mail: identity-052@example.invalid
+%% E-mail: identity-035@customer-019.example.com
 %%
 %% This program can be redistributed and/or modified under the terms
 %% of the LaTeX Project Public License Distributed from CTAN

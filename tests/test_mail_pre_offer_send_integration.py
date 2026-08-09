@@ -55,8 +55,8 @@ def follow_up_dataset() -> dict:
         "_content": "<p>Dziękuję. Proszę o informację, czego jeszcze Państwo potrzebują.</p>",
         "_header": (
             "Message-ID: <follow-up-1@example.com>\n"
-            "In-Reply-To: <identity-116@example.invalid>\n"
-            "References: <identity-116@example.invalid>\n"
+            "In-Reply-To: <identity-091@customer-004.example.com>\n"
+            "References: <identity-091@customer-004.example.com>\n"
         ),
     })
     return data
@@ -113,7 +113,7 @@ def test_mail_poller_sends_pre_offer_response_exactly_once(tmp_path: Path):
     assert second["already_processed"] == 1
 
 
-def test_real_mail_workflow_persists_and_sends_follow_up_exactly_once(
+def test_real_mail_workflow_persists_and_sends_ready_notice_exactly_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ):
     class Poster:
@@ -154,8 +154,8 @@ def test_real_mail_workflow_persists_and_sends_follow_up_exactly_once(
     assert len(poster.calls) == 1
     assert first["responses_sent"] == 1
     assert second["already_processed"] == 1
-    assert event["metadata"]["message_policy"]["effective_type"] == "follow_up"
-    assert dict(outbox)["message_type"] == "follow_up"
+    assert event["metadata"]["message_policy"]["effective_type"] == "ready_for_offer_notice"
+    assert dict(outbox)["message_type"] == "ready_for_offer_notice"
     registry.close()
 
 

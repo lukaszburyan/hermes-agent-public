@@ -105,10 +105,11 @@ Moge zaproponowac krotka rozmowe w jednym z tych terminow:
 Use exactly:
 
 ```text
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq
 ```
 
 Add `https://orchesta.eu/` only when the context naturally calls for it.

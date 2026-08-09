@@ -38,10 +38,11 @@ BACKUP_ARGS=(
   --image-digest "$DIGEST" \
   --skill-version "$SKILL_VERSION" \
   --offsite-remote "$OFFSITE" \
-  --require-offsite
+  --require-offsite \
+  --retention-days "$RETENTION_DAYS"
 )
 if [[ "$RETENTION_APPROVED" == "1" ]]; then
-  BACKUP_ARGS+=(--retention-days "$RETENTION_DAYS" --retention-delete-approved)
+  BACKUP_ARGS+=(--retention-delete-approved)
 else
   echo "Backup retention deletion is not explicitly approved; creating verified off-site backup without deletion" >&2
 fi

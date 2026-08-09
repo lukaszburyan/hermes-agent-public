@@ -18,8 +18,7 @@ def test_email_classifier_recognizes_reserved_and_local_placeholders() -> None:
     assert classify_email("buyer@example.com") == "placeholder_or_public"
     assert classify_email("buyer@tenant.hermes.local") == "placeholder_or_public"
     assert classify_email("buyer@vps.example.invalid") == "placeholder_or_public"
-    review_candidate = "buyer" + "@" + "customer" + ".pl"
-    assert classify_email(review_candidate) == "review"
+    assert classify_email("identity-090@customer-060.example.com") == "review"
 
 
 def test_phone_classifier_keeps_structurally_valid_placeholders_out_of_review() -> None:

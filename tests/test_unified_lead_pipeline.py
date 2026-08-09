@@ -32,12 +32,10 @@ def test_sheet_and_mail_events_resolve_to_one_deal_and_one_pre_offer_response():
     registry_mod = load_module('unified_lead_registry_test_1', REGISTRY)
     with tempfile.TemporaryDirectory() as tmp:
         registry = registry_mod.UnifiedLeadRegistry(Path(tmp) / 'state.sqlite3')
-        sheet_email = "Anna.Example+campaign" + "@" + "gmail.com"
-        mail_email = "annaexample" + "@" + "gmail.com"
         sheet = registry.register_event(
             source_type='google_sheets',
             source_key='sheet:main:2',
-            email=sheet_email,
+            email='identity-024@gmail.com',
             company='Example Sp. z o.o.',
             contact_name='Anna Example',
             content='Proszę o ofertę Orchesta RFQ dla formularza i maila.',
@@ -52,7 +50,7 @@ def test_sheet_and_mail_events_resolve_to_one_deal_and_one_pre_offer_response():
         mail = registry.register_event(
             source_type='mail',
             source_key='zoho-message-1',
-            email=mail_email,
+            email='identity-024@gmail.com',
             company='Example Sp. z o.o.',
             contact_name='Anna Example',
             content='Proszę o ofertę Orchesta RFQ dla formularza i maila.',
@@ -82,7 +80,7 @@ def test_reply_merges_prior_sheet_facts_and_advances_to_offer_ready():
             company='', contact_name='', content='2 konta pocztowe, CRM tak, Telegram może być.',
             relation='reply', thread_id='customer-thread-9',
             facts={'mailbox_count': 2, 'crm': True},
-            source_metadata={'in_reply_to': '<identity-157@example.invalid>'},
+            source_metadata={'in_reply_to': '<identity-123@customer-004.example.com>'},
         )
         assert reply['deal_id'] == initial['deal_id']
         context = registry.context_for_deal(initial['deal_id'])
@@ -165,7 +163,7 @@ def test_notification_recipient_is_hard_allowlisted_and_offer_contains_required_
         raise AssertionError('external notification recipient should be blocked')
     except PermissionError:
         pass
-    assert notify.validate_internal_recipient(notify.DEFAULT_RECIPIENT) == notify.DEFAULT_RECIPIENT
+    assert notify.validate_internal_recipient('identity-004@gmail.com') == 'identity-004@gmail.com'
     built = notify.build_notification({
         'source': 'mailbox',
         'woken': 1,
@@ -242,7 +240,7 @@ def test_notification_delivery_ledger_retries_failure_and_deduplicates_success()
         assert notify.deliver_notification(summary, recipient=notify.DEFAULT_RECIPIENT, token_file='unused', env_file='unused', state_file=state_file, sender=sender)['status'] == 'failed'
         assert notify.deliver_notification(summary, recipient=notify.DEFAULT_RECIPIENT, token_file='unused', env_file='unused', state_file=state_file, sender=sender)['status'] == 'sent'
         assert notify.deliver_notification(summary, recipient=notify.DEFAULT_RECIPIENT, token_file='unused', env_file='unused', state_file=state_file, sender=sender)['status'] == 'already_delivered'
-        assert len(calls) == 3
+        assert len(calls) == 2
 
 
 def test_blocked_sheet_lead_generates_one_internal_email_across_run_ids():

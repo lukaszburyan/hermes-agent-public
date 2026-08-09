@@ -46,6 +46,18 @@ def test_each_poller_has_one_canonical_entrypoint_and_its_own_lock():
 def test_compose_mounts_runtime_environment_for_canonical_wrappers():
     compose = (ROOT / "infrastructure" / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
     assert "${HERMES_RUNTIME_ENV_FILE}:/opt/data/.env:ro" in compose
+    assert "HERMES_RELEASE_COMMIT: ${HERMES_RELEASE_COMMIT:?" in compose
+    assert "HERMES_RELEASE_TAG: ${HERMES_RELEASE_TAG:?" in compose
+
+
+def test_entrypoint_rejects_release_metadata_that_differs_from_the_image():
+    entrypoint = (ROOT / "infrastructure" / "docker" / "release-entrypoint.sh").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "infrastructure" / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    for name in ("COMMIT", "TAG"):
+        assert f"IMAGE_RELEASE_{name}" in dockerfile
+        assert f"IMAGE_RELEASE_{name}" in entrypoint
+    assert '[[ "$HERMES_RELEASE_COMMIT" != "$image_commit" ]]' in entrypoint
+    assert '[[ "$HERMES_RELEASE_TAG" != "$image_tag" ]]' in entrypoint
 
 
 def test_legacy_wrappers_immediately_delegate_to_the_canonical_entrypoints():
@@ -114,8 +126,18 @@ def test_scheduler_inventory_checks_internal_jobs_user_crons_and_exact_container
     assert "internal_scheduler_hits" in inventory
     assert '"hermes-rfq-state-backup.timer"' in inventory
     assert '"hermes-rfq-release-monitor.timer"' in inventory
+    assert '"claim_reaper"' in inventory
+    assert '"hermes-rfq-claim-reaper.timer"' in inventory
     assert "exact_image_match" in inventory
     assert '"docker",\n        "inspect"' in inventory
+
+
+def test_critical_monitor_activates_persistent_transport_kill_switch():
+    monitor = (ROOT / "scripts" / "hermes-release-monitor.sh").read_text(encoding="utf-8")
+    transport = TRANSPORT.read_text(encoding="utf-8")
+    assert "TRANSPORT_KILL_SWITCH" in monitor
+    assert 'if [ "$CODE" -ne 0 ]' in monitor
+    assert "HERMES_TRANSPORT_KILL_SWITCH_FILE" in transport
 
 
 def test_runtime_services_use_the_release_environment_and_exact_container():
@@ -150,8 +172,11 @@ def test_release_environment_and_ci_bundle_cover_every_host_runtime_input():
         "HERMES_CONTAINER_NAME",
         "HERMES_RUNTIME_DIR",
         "HERMES_RUNTIME_ENV_FILE",
+        "HERMES_RCLONE_CONFIG_DIR",
         "HERMES_RCLONE_CONFIG_FILE",
         "HERMES_RELEASE_IMAGE",
+        "HERMES_RELEASE_COMMIT",
+        "HERMES_RELEASE_TAG",
         "HERMES_RELEASE_DIGEST",
         "HERMES_TRANSPORT_KILL_SWITCH",
         "HERMES_OPERATIONAL_AUTOSEND_ENABLED",

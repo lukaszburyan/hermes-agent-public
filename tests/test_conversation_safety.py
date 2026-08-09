@@ -50,7 +50,7 @@ def mail_dataset(*, manual_sent: bool = False, body: str | None = None) -> dict:
             "hasAttachment": "0",
             "receivedTime": "1784541600000",
             "_content": body or "<p>Proszę o informacje o systemie Orchesta RFQ.</p>",
-            "_header": "Message-ID: <in-1@example.com>\nIn-Reply-To: <identity-113@example.invalid>\nReferences: <identity-113@example.invalid>\n",
+            "_header": "Message-ID: <in-1@example.com>\nIn-Reply-To: <identity-089@customer-004.example.com>\nReferences: <identity-089@customer-004.example.com>\n",
             "_attachmentinfo": [],
         }
     ]
@@ -89,7 +89,7 @@ def test_new_thread_with_distinct_subject_creates_separate_deal(tmp_path: Path):
     assert "Wdrożenie RFQ w Example" not in registry.context_text(second["deal_id"])
 
 
-def test_new_unanchored_unique_exact_subject_links_existing_deal(tmp_path: Path):
+def test_new_unanchored_exact_subject_is_only_auxiliary_evidence(tmp_path: Path):
     registry_mod = load_module("registry_new_thread_exact_subject", REGISTRY_PATH)
     registry = registry_mod.UnifiedLeadRegistry(tmp_path / "unified.sqlite3")
     first = register_mail(registry, key="m-1", thread="thread-1", subject="Orchesta RFQ")
@@ -98,7 +98,8 @@ def test_new_unanchored_unique_exact_subject_links_existing_deal(tmp_path: Path)
     assert second["correlation_outcome"] == "linked"
     assert second["routing_action"] == "link_existing"
     assert second["deal_id"] == first["deal_id"]
-    assert "hard:exact_normalized_subject" in second["routing_decision"]["evidence"]
+    assert "hard:exact_normalized_subject" not in second["routing_decision"]["evidence"]
+    assert any(item.startswith("score:exact_subject:") for item in second["routing_decision"]["evidence"])
 
 
 def test_new_unanchored_no_thread_id_same_topic_links_to_existing_deal(tmp_path: Path):

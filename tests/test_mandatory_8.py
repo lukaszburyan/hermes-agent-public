@@ -72,7 +72,7 @@ def test_1_first_contact_from_gmail():
     out = lic.classify(
         subject="Zapytanie o system",
         body="Dzień dobry, kontaktuję się, bo chciałem zapytać, czy taki system Orchesta też by pasował do mojego biznesu, zajmuję się handlem wielobranżowym. Pozdrawiam, Krzysztof Ogórek.",
-        sender="identity-117@example.invalid",
+        sender="identity-019@gmail.com",
         recipient="rfq-mailbox@example.invalid",
         tenant_id="orchesta",
         llm_client=_ClassifyClient(payload),
@@ -209,7 +209,7 @@ def test_6_no_telegram_anywhere():
     # No Telegram in the rendered offer HTML/PDF template.
     html = rfo.render_offer_html_for_tenant({
         "offer": {"offer_number": "X", "version": 1, "date": "2026-08-03"},
-        "client": {"full_name": "K", "company": "C", "email": "identity-110@example.invalid"},
+        "client": {"full_name": "K", "company": "C", "email": "identity-086@customer-058.example.com"},
         "scope": {"mailbox_count": 1, "mailbox_label": "konto", "crm_label": "nie", "inquiry_source_label": "mail"},
         "pricing": {"line_items": [{"name": "x", "net_display": "7200 zł"}], "net_total_display": "7200 zł"},
         "roi": {"title": "t", "description": "d", "hours_text": "h", "cost_text": "c"},
@@ -245,7 +245,7 @@ def test_7_second_company_isolation():
     # Render the offer with firma_abc context; no Orchesta data leaks in.
     html = rfo.render_offer_html_for_tenant({
         "offer": {"offer_number": "ABC-2026-0001", "version": 1, "date": "2026-08-03"},
-        "client": {"full_name": "Jan K", "company": "Firma ABC", "email": "identity-111@example.invalid"},
+        "client": {"full_name": "Jan K", "company": "Firma ABC", "email": "identity-087@customer-059.example.com"},
         "scope": {"mailbox_count": 1, "mailbox_label": "stanowisko", "crm_label": "nie", "inquiry_source_label": "mail"},
         "pricing": {"line_items": [{"name": "Firma ABC, wdrożenie podstawowe", "net_display": "5000 zł"}], "net_total_display": "5000 zł"},
         "roi": {"title": "t", "description": "d", "hours_text": "h", "cost_text": "c"},
@@ -267,7 +267,7 @@ def test_8_full_path_no_manual_cleanup():
         # lead from sheet -> first message
         deal = reg.register_event(
             source_type="sheet", source_key="row-1",
-            email="identity-118@example.invalid", company="", contact_name="Marek",
+            email="identity-092@customer-059.example.com", company="", contact_name="Marek",
             content="Zapytanie z arkusza", relation="new", tenant_id="orchesta",
         )
         did = deal["deal_id"]
@@ -298,7 +298,7 @@ def test_8_full_path_no_manual_cleanup():
         assert rfq.startswith("RFQ-20260803-")
         html = rfo.render_offer_html_for_tenant({
             "offer": {"offer_number": rfq, "version": 1, "date": "2026-08-03"},
-            "client": {"full_name": "Marek", "company": "ABC Sp. z o.o.", "email": "identity-118@example.invalid"},
+            "client": {"full_name": "Marek", "company": "ABC Sp. z o.o.", "email": "identity-092@customer-059.example.com"},
             "scope": {"mailbox_count": 3, "mailbox_label": "konta pocztowe", "crm_label": "tak", "inquiry_source_label": "mail"},
             "pricing": {"line_items": [{"name": "Orchesta RFQ", "net_display": "7200 zł"}], "net_total_display": "7200 zł"},
             "roi": {"title": "t", "description": "d", "hours_text": "h", "cost_text": "c"},

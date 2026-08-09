@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -60,8 +61,10 @@ from zoho_mail_poller import (  # noqa: E402
     normalize_envelope,
     orchesta_fit,
     relationship,
+    select_account,
     sent_message_recipients,
 )
+from restore_gate import assert_restore_reconciled  # noqa: E402
 from send_reconciliation import append_marker as append_customer_send_marker, reconcile_sent_rows  # noqa: E402
 from zoho_pre_offer_send import (  # noqa: E402
     APPROVAL_PHRASE as PRE_OFFER_SEND_APPROVAL,
@@ -142,11 +145,20 @@ def _llm_shadow_classify(
     if not _llm_enabled():
         return None
     try:
+        deterministic_risk = str(result.get("risk") or "low").strip().lower()
+        classification = str(result.get("classification") or "")
+        if classification == "human_review_only" or (
+            classification == "new_quote_request" and not draftable_from_sheet(result, lead)
+        ):
+            deterministic_risk = "high"
+        elif classification in REVIEW_CLASSES:
+            deterministic_risk = "medium"
         return _lic.classify(
             subject=f"Lead z Google Sheets — {lead.get('Firma') or lead.get('Imię') or lead.get('Email')}",
             body=synthesize_body(lead),
             sender=lead.get("Email", ""),
             recipient="",
+            safety_check={"script_risk": deterministic_risk},
             tenant_id=tenant_id,
             llm_client=_get_llm_client(),
             run_id=run_id,
@@ -181,8 +193,16 @@ def make_llm_body_generator(
     def _gen(context: dict[str, Any]) -> dict[str, Any]:
         if not _llm_enabled() or _lrw is None or _rv is None:
             raise ReplyValidationError("llm_disabled")
+        from reply_contract import REPLY_CONTRACT_DIGEST
+        from reply_sanitizer import sanitize_reply
+        registry = context.get("registry")
+        operation_id = str(context.get("operation_id") or f"response:{context.get('source_key') or run_id}")
+        deal_id = str(context.get("deal_id") or "")
         last_error = "llm_write_failed"
-        for _attempt in (1, 2):
+        previous_body = ""
+        previous_errors: list[str] = []
+        previous_spans: list[dict[str, Any]] = []
+        for attempt_number in (1, 2):
             outcome = _lrw.write_reply(
                 approved_action="ask_discovery_questions",
                 customer_message=synthesize_body(lead),
@@ -194,10 +214,21 @@ def make_llm_body_generator(
                 is_first_agent_reply=is_first_agent_reply,
                 llm_client=_get_llm_client(),
                 run_id=run_id,
+                repair_context=(
+                    {
+                        "previous_body": previous_body,
+                        "validation_error_codes": previous_errors,
+                        "offending_spans": previous_spans,
+                    }
+                    if attempt_number == 2 else None
+                ),
             )
-            body = ensure_campaign_origin_context(str(outcome.get("body") or "").strip())
+            raw_body = ensure_campaign_origin_context(str(outcome.get("body") or "").strip())
+            sanitized = sanitize_reply(raw_body, is_first_agent_reply=is_first_agent_reply)
+            body = str(sanitized.get("body") or "").strip()
             if not body or outcome.get("needs_human_review"):
                 last_error = str(outcome.get("review_reason") or "llm_write_failed")
+                previous_errors = [last_error]
                 continue
             verdict = _rv.validate_reply(
                 body=body,
@@ -208,7 +239,18 @@ def make_llm_body_generator(
                 missing_data=missing_data,
             )
             if not verdict.get("ok"):
-                last_error = ",".join(verdict.get("errors", []) or ["validation_failed"])
+                previous_body = body
+                previous_errors = list(verdict.get("errors") or ["validation_failed"])
+                previous_spans = list(sanitized.get("offending_spans") or [])
+                last_error = ",".join(previous_errors)
+                if registry is not None and deal_id:
+                    registry.record_validation_attempt(
+                        operation_id, deal_id=deal_id, attempt_number=attempt_number,
+                        prompt_version=str(outcome.get("prompt_version") or ""),
+                        contract_digest=REPLY_CONTRACT_DIGEST, body=body, error_codes=previous_errors,
+                        offending_spans=previous_spans,
+                        sanitizer_actions=list(sanitized.get("actions") or []),
+                    )
                 continue
             return {
                 "body_text": body,
@@ -221,9 +263,18 @@ def make_llm_body_generator(
                     if tenant_config.discovery_questions(tenant_id, field)
                 ],
                 "assumptions": [],
-                "safety_notes": [f"missing:{','.join(missing_data) or 'none'}"],
+                "safety_notes": [
+                    f"sanitized:{','.join(sanitized.get('actions') or []) or 'none'}",
+                    f"missing:{','.join(missing_data) or 'none'}",
+                ],
                 "validated": True,
             }
+        if registry is not None and deal_id:
+            registry.finalize_response_attempt(
+                operation_id, outcome="validation_failed",
+                reason_codes=[f"reply_validation_failed_after_retry:{last_error}"],
+                rejected_body=previous_body, validation_errors=previous_errors or [last_error],
+            )
         raise ReplyValidationError(f"reply_validation_failed_after_retry:{last_error}")
 
     return _gen
@@ -248,6 +299,7 @@ HERMES_HEADERS = [
     "Hermes hash",
     "Hermes draft id",
     "Hermes sent id",
+    "Hermes source id",
 ]
 REQUIRED_HEADERS = BASE_HEADERS + HERMES_HEADERS
 
@@ -450,6 +502,18 @@ def lead_hash(lead: dict[str, str]) -> str:
     return sha256_text(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+def ensure_sheet_source_id(existing: str = "") -> str:
+    value = str(existing or "").strip()
+    return value or ("gsr-" + uuid.uuid4().hex)
+
+
+def sheet_source_key(spreadsheet_id: str, logical_source_id: str) -> str:
+    source_id = str(logical_source_id or "").strip()
+    if not source_id:
+        raise ValueError("logical_sheet_source_id_required")
+    return f"sheet:{spreadsheet_id}:{source_id}"
+
+
 def lead_has_content(lead: dict[str, str]) -> bool:
     return bool(lead.get("Email") or lead.get("Telefon") or lead.get("Firma") or lead.get("Wiadomość"))
 
@@ -647,7 +711,10 @@ def send_sheet_zoho_response(
 ) -> dict[str, Any]:
     """Send a new pre-offer Zoho message using the employee-style composer."""
     client = HttpZohoClient(zoho_token_file, env_file)
-    account = client.list_accounts()[0]
+    configured_account = str(os.environ.get("ZOHO_MAIL_ACCOUNT_EMAIL") or "").strip()
+    if not configured_account:
+        raise RuntimeError("zoho_account_resolution_failed:configuration_missing")
+    account = select_account(client.list_accounts(), configured_account)
     account_id = str(account["accountId"])
     account_email = str(account.get("primaryEmailAddress") or "rfq-mailbox@example.invalid")
     body_text = synthesize_body(lead)
@@ -674,6 +741,7 @@ def send_sheet_zoho_response(
         "attachment_routes": [],
         "attachment_summaries": [],
     }
+    context.update(dict(durable_context or {}))
     generated = (body_generator or generate_draft_body_from_env)(context)
     generated_body_text = ensure_campaign_origin_context(str(generated.get("body_text") or ""))
     if generated.get("validated"):
@@ -796,7 +864,10 @@ def reconcile_sheet_send(
 ) -> dict[str, Any]:
     """Resolve an uncertain Sheets send only by its exact marker in Zoho Sent."""
     client = HttpZohoClient(zoho_token_file, env_file)
-    account = client.list_accounts()[0]
+    configured_account = str(os.environ.get("ZOHO_MAIL_ACCOUNT_EMAIL") or "").strip()
+    if not configured_account:
+        return {"resolved": False, "status": "account_configuration_missing", "retryable": False}
+    account = select_account(client.list_accounts(), configured_account)
     account_id = str(account["accountId"])
     sent_folder = find_sent_folder(client.list_folders(account_id))
     sent_folder_id = folder_id_of(sent_folder or {})
@@ -927,6 +998,7 @@ def build_briefing(
 
 
 def process(args: argparse.Namespace) -> dict[str, Any]:
+    assert_restore_reconciled()
     selection = controlled_selection(args)
     sheets, drive = load_google_services(args.token_file)
     meta = drive.files().get(fileId=args.spreadsheet_id, fields="id,name,capabilities,webViewLink").execute()
@@ -968,7 +1040,7 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
     send_reconciled = 0
     send_outcome_unknown = 0
     final_offer_drafts_created = 0
-    updates: list[tuple[int, str, str, str, str, str, str, str]] = []
+    updates: list[tuple[int, str, str, str, str, str, str, str, str]] = []
     controlled_unselected_rows = 0
 
     for offset, row in enumerate(rows[1:], start=2):
@@ -982,9 +1054,19 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
         digest = lead_hash(lead)
         current_status = lead.get("Hermes status", "").strip()
         current_hash = lead.get("Hermes hash", "").strip()
-        key = str(offset)
+        logical_source_id = str(lead.get("Hermes source id") or "").strip()
+        if not logical_source_id:
+            logical_source_id = ensure_sheet_source_id()
+            if not args.dry_run:
+                source_col = header_index["Hermes source id"] + 1
+                update_values(
+                    sheets, args.spreadsheet_id, args.sheet_name,
+                    f"{col_letter(source_col)}{offset}", [[logical_source_id]],
+                )
+            lead["Hermes source id"] = logical_source_id
+        key = logical_source_id
         state_hash = str(state_rows.get(key, {}).get("hash", ""))
-        source_key = f"sheet:{args.spreadsheet_id}:{args.sheet_name}:{offset}:{digest[:16]}"
+        source_key = sheet_source_key(args.spreadsheet_id, logical_source_id)
         if args.dry_run:
             registry_event = {
                 "deal_id": "",
@@ -1009,6 +1091,13 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
                     "sheet_name": args.sheet_name,
                     "row": offset,
                     "content_hash": digest,
+                    "content_version": digest,
+                    "logical_source_id": logical_source_id,
+                    "resolved_reply_recipient": normalize_email(lead.get("Email", "")),
+                    "recipient_resolution_evidence": {
+                        "method": "sheet_email", "reply_all": False,
+                        "resolved_reply_recipient": normalize_email(lead.get("Email", "")),
+                    },
                 },
             )
 
@@ -1032,7 +1121,7 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
                 draft_id = str((deal or {}).get("final_draft_id") or (deal or {}).get("current_draft_id") or "")
                 sent_id = str((deal or {}).get("last_response_id") or "")
                 note = "Status zsynchronizowany ze wspólnym procesem skrzynki i Arkusza."
-                updates.append((offset, desired, lead.get("Hermes klasyfikacja", ""), note, now_iso(), digest, draft_id, sent_id))
+                updates.append((offset, desired, lead.get("Hermes klasyfikacja", ""), note, now_iso(), digest, draft_id, sent_id, logical_source_id))
             skipped += 1
             continue
 
@@ -1306,7 +1395,7 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
         tg_sent = send_telegram_notification(briefing["telegram_text"]) if not args.dry_run else False
         briefing["telegram"] = {"action": "internal_email_notify", "sent": tg_sent}
         processed.append(briefing)
-        updates.append((offset, status, str(result.get("classification", "unknown_review_needed")), note, checked, digest, draft_id, sent_id))
+        updates.append((offset, status, str(result.get("classification", "unknown_review_needed")), note, checked, digest, draft_id, sent_id, logical_source_id))
         state_rows[key] = {"hash": digest, "status": status, "classification": result.get("classification"), "processed_at": checked, "draft_id": draft_id, "sent_id": sent_id}
 
     if updates and not args.dry_run:
@@ -1315,17 +1404,17 @@ def process(args: argparse.Namespace) -> dict[str, Any]:
         # Update each row's Hermes columns in one compact range. Assumes Hermes headers are contiguous;
         # if user rearranges columns, update cells individually.
         contiguous = [header[i] for i in range(min_col - 1, max_col)] == HERMES_HEADERS
-        for row_number, status, classification, note, checked, digest, draft_id, sent_id in updates:
+        for row_number, status, classification, note, checked, digest, draft_id, sent_id, logical_source_id in updates:
             if contiguous:
                 update_values(
                     sheets,
                     args.spreadsheet_id,
                     args.sheet_name,
                     f"{col_letter(min_col)}{row_number}:{col_letter(max_col)}{row_number}",
-                    [[status, classification, note, checked, digest, draft_id, sent_id]],
+                    [[status, classification, note, checked, digest, draft_id, sent_id, logical_source_id]],
                 )
             else:
-                for name, value in zip(HERMES_HEADERS, [status, classification, note, checked, digest, draft_id, sent_id]):
+                for name, value in zip(HERMES_HEADERS, [status, classification, note, checked, digest, draft_id, sent_id, logical_source_id]):
                     col = header_index[name] + 1
                     update_values(sheets, args.spreadsheet_id, args.sheet_name, f"{col_letter(col)}{row_number}", [[value]])
         save_state(args.state_file, state)

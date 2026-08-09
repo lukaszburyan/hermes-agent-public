@@ -22,6 +22,8 @@ from typing import Any
 
 import yaml
 
+from offer_readiness import NON_BLOCKING_UNKNOWN_POLICIES, normalize_fact, resolve_readiness
+
 EXECUTION_DIR = Path(__file__).resolve().parent
 ROOT_DIR = EXECUTION_DIR.parent
 TENANTS_DIR = ROOT_DIR / "tenants"
@@ -147,16 +149,25 @@ def missing_fields(
     """Return offer.yaml fields still empty for ``stage`` given saved deal facts."""
     facts = saved_data or {}
     missing: list[str] = []
+    rules = offer_fields(tenant_id)
     for name in required_fields_for_stage(tenant_id, stage):
-        value = facts.get(name)
-        if value is None or value == "" or value == {}:
+        state = normalize_fact(facts.get(name))
+        policy = str((rules.get(name) or {}).get("unknown_policy") or "clarify")
+        if state.get("state") == "conflicting":
             missing.append(name)
-    # CRM is a standard discovery ask for Orchesta even when not listed under
-    # offer.yaml required_for — include it when discovery.yaml defines it.
-    discovery = load_tenant_yaml(tenant_id, "discovery").get("questions", {}) or {}
-    if "crm" in discovery and "crm" not in missing and facts.get("crm") in (None, "", {}):
-        missing.append("crm")
+        elif state.get("state") not in {"known", "assumed"} and policy not in NON_BLOCKING_UNKNOWN_POLICIES:
+            missing.append(name)
     return missing
+
+
+def resolve_offer_readiness(
+    tenant_id: str,
+    saved_data: dict[str, Any] | None,
+    *,
+    stage: str = "final_offer",
+) -> dict[str, Any]:
+    """Return deterministic readiness plus approved assumptions for an offer."""
+    return resolve_readiness(saved_data or {}, offer_fields(tenant_id), stage=stage)
 
 
 def customer_visible_fields(tenant_id: str, stage: str | None = None) -> list[str]:
@@ -283,11 +294,21 @@ def self_test() -> int:
         failures.append("current_process should NOT be required for final_offer")
     if not customer_visible_fields("orchesta", "final_offer"):
         failures.append("orchesta final_offer should have customer_visible fields")
+    readiness = resolve_offer_readiness(
+        "orchesta",
+        {
+            "company_name_or_website": "Example Sp. z o.o.",
+            "mailbox_count": {"state": "unknown_confirmed"},
+            "crm": {"state": "unknown_confirmed"},
+        },
+    )
+    if readiness.get("status") != "ready_with_assumptions":
+        failures.append("unknown mailbox/CRM should resolve to an explicit start variant")
 
     # tenant_id resolution (spec section 3)
     if resolve_tenant_id("rfq-mailbox@example.invalid") != "orchesta":
         failures.append("rfq-mailbox@example.invalid should resolve to orchesta")
-    if resolve_tenant_id("identity-007@example.invalid") != "orchesta":
+    if resolve_tenant_id("identity-004@customer-004.example.com") != "orchesta":
         failures.append("resolver should be case-insensitive")
     if resolve_tenant_id("unknown@nowhere.test") != "":
         failures.append("unknown mailbox should resolve to empty (no default)")
@@ -315,7 +336,7 @@ def self_test() -> int:
                 failures.append(f"{tenant} notifications.yaml missing internal_notifications")
     if not load_commercial_policy("orchesta").get("manual_review"):
         failures.append("orchesta commercial_policy.yaml missing manual_review rules")
-    if internal_notification_email("orchesta") != "identity-008@example.invalid":
+    if internal_notification_email("orchesta") != "identity-004@gmail.com":
         failures.append("orchesta internal notification email is wrong")
     for sample, expected in (
         ("Czy możemy dostać rabat?", "discount"),

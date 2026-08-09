@@ -61,9 +61,9 @@ def test_write_reply_returns_validated_reply_and_keeps_action():
     assert result["attempts"] == 1
 
 
-def test_write_reply_retries_once_then_succeeds():
+def test_write_reply_never_repeats_the_same_prompt_and_repair_gets_context():
     client = FixtureLLMClient(responses=["not json", json.dumps(GOOD)])
-    result = lrw.write_reply(
+    first = lrw.write_reply(
         approved_action="reply_directly",
         customer_message="x",
         thread_history="",
@@ -74,11 +74,28 @@ def test_write_reply_retries_once_then_succeeds():
         is_first_agent_reply=False,
         llm_client=client,
     )
-    assert result["attempts"] == 2
+    assert first["state"] == "awaiting_human"
+    result = lrw.write_reply(
+        approved_action="reply_directly",
+        customer_message="x",
+        thread_history="",
+        saved_data={"company_name": "ABC"},
+        missing_data=["current_process"],
+        conversation_stage="discovery",
+        tenant_id="orchesta",
+        is_first_agent_reply=False,
+        llm_client=client,
+        repair_context={
+            "previous_body": "invalid",
+            "validation_error_codes": ["invalid_json"],
+            "offending_spans": [],
+        },
+    )
+    assert result["attempts"] == 1
     assert result["body"] == GOOD["body"]
 
 
-def test_write_reply_two_bad_parses_routes_to_awaiting_human():
+def test_write_reply_bad_parse_routes_to_awaiting_human_without_identical_retry():
     client = FixtureLLMClient(responses=["not json", "{still not json"])
     result = lrw.write_reply(
         approved_action="reply_directly",

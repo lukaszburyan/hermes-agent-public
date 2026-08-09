@@ -197,7 +197,7 @@ GAPI="python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/
 ```bash
 # Search (returns JSON array with id, from, subject, date, snippet)
 $GAPI gmail search "is:unread" --max 10
-$GAPI gmail search "from:identity-040@example.invalid newer_than:1d"
+$GAPI gmail search "from:identity-024@customer-010.example.com newer_than:1d"
 $GAPI gmail search "has:attachment filename:pdf newer_than:7d"
 
 # Read full message (returns JSON with body text)
@@ -228,7 +228,7 @@ $GAPI calendar list --start 2026-03-01T00:00:00Z --end 2026-03-07T23:59:59Z
 # Create event (ISO 8601 with timezone required)
 $GAPI calendar create --summary "Team Standup" --start 2026-03-01T10:00:00-06:00 --end 2026-03-01T10:30:00-06:00
 $GAPI calendar create --summary "Lunch" --start 2026-03-01T12:00:00Z --end 2026-03-01T13:00:00Z --location "Cafe"
-$GAPI calendar create --summary "Review" --start 2026-03-01T14:00:00Z --end 2026-03-01T15:00:00Z --attendees "identity-041@example.invalid,identity-042@example.invalid"
+$GAPI calendar create --summary "Review" --start 2026-03-01T14:00:00Z --end 2026-03-01T15:00:00Z --attendees "identity-025@customer-012.example.com,identity-026@customer-012.example.com"
 
 # Delete event
 $GAPI calendar delete EVENT_ID
