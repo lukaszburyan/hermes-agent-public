@@ -47,7 +47,7 @@ Dostałeś zapytanie o wycenę od Jana Kowalskiego z instalacje-example.pl. Spra
 Review-only shape:
 
 ```text
-Dostałeś wiadomość od identity-002@example.invalid o automatyzacji poufnych wycen medycznych. To słaby fit i temat wrażliwy, więc nie przygotowałem draftu do klienta; daj znać, czy odpisać krótko odmownie, czy zostawić bez odpowiedzi.
+Dostałeś wiadomość od identity-002@customer-002.example.com o automatyzacji poufnych wycen medycznych. To słaby fit i temat wrażliwy, więc nie przygotowałem draftu do klienta; daj znać, czy odpisać krótko odmownie, czy zostawić bez odpowiedzi.
 ```
 
 ## Learning Updates

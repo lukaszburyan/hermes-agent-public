@@ -5,7 +5,7 @@
   "description": "LLM output for reply authoring (spec section 12). The LLM writes the reply text only; it never changes the approved action.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["subject", "body", "needs_human_review"],
+  "required": ["subject", "body", "needs_human_review", "contract_version", "message_language"],
   "properties": {
     "subject": {
       "type": "string",
@@ -22,6 +22,15 @@
     "review_reason": {
       "type": ["string", "null"],
       "description": "Short reason when needs_human_review is true; null otherwise."
+    },
+    "contract_version": {
+      "const": "reply-contract-v1",
+      "description": "Version of the contract used to author the reply."
+    },
+    "message_language": {
+      "type": "string",
+      "enum": ["pl", "en", "de"],
+      "description": "Language used in the customer-facing body."
     }
   }
 }

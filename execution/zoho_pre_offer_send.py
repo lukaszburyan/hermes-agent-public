@@ -11,6 +11,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from message_policy import (
@@ -22,12 +23,13 @@ from message_policy import (
     normalize_message_type,
 )
 from unified_lead_registry import contact_identity_for_email, normalize_email
+from restore_gate import assert_restore_reconciled
 from zoho_reply_draft import HttpDraftPoster, build_draft_payload, contains_price
 
 APPROVAL_PHRASE = "AUTOMATED PRE-OFFER CUSTOMER SEND APPROVED"
 ALLOWED_MESSAGE_KINDS = set(AUTO_SEND_TYPES)
 FORBIDDEN_OFFER_KINDS = {"final_offer", "offer", "price_quote", "quote", "commercial_offer"}
-SUCCESS_STATUSES = {200, 201}
+SUCCESS_STATUSES = {200, 201, 202}
 
 
 def _assert_pre_offer_kind(message_kind: str) -> str:
@@ -44,6 +46,14 @@ def _assert_pre_offer_kind(message_kind: str) -> str:
 
 def _enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _transport_kill_switch_enabled() -> bool:
+    marker = Path(os.environ.get(
+        "HERMES_TRANSPORT_KILL_SWITCH_FILE",
+        "/opt/data/rfq-state/TRANSPORT_KILL_SWITCH",
+    ))
+    return _enabled("HERMES_TRANSPORT_KILL_SWITCH") or marker.exists()
 
 
 def _recipient_allowed_in_test_mode(recipient: str) -> bool:
@@ -133,12 +143,22 @@ def _durable_transport_state(
 
     recipient_raw = str(payload.get("toAddress") or "").strip().lower()
     recipient = normalize_email(recipient_raw)
-    expected = {
-        normalize_email(str(event.get("email") or "")),
-        normalize_email(str(deal.get("primary_email") or "")),
-    }
-    expected.discard("")
-    if not recipient or len(expected) != 1 or recipient not in expected:
+    durable_recipient = normalize_email(str(
+        event.get("resolved_reply_recipient")
+        or metadata.get("resolved_reply_recipient")
+        or event.get("email")
+        or ""
+    ))
+    recipient_evidence = event.get("recipient_evidence_json") or metadata.get("recipient_resolution_evidence") or {}
+    if isinstance(recipient_evidence, str):
+        try:
+            recipient_evidence = json.loads(recipient_evidence or "{}")
+        except json.JSONDecodeError:
+            recipient_evidence = {}
+    if not recipient or not durable_recipient or recipient != durable_recipient or not recipient_evidence:
+        return registry, event, deal, "durable_recipient_mismatch"
+    durable_deal_recipient = normalize_email(str(deal.get("primary_email") or ""))
+    if not durable_deal_recipient or durable_deal_recipient != durable_recipient:
         return registry, event, deal, "durable_recipient_mismatch"
     if normalize_email(str(outbox.get("recipient") or "")) != recipient:
         return registry, event, deal, "durable_outbox_recipient_mismatch"
@@ -193,7 +213,7 @@ def build_pre_offer_payload(
         account_email=account_email,
         to_address=to_address,
         inbound_subject=inbound_subject,
-        rfc_message_id="<identity-024@example.invalid>" if threaded else "",
+        rfc_message_id="<identity-012@customer-004.example.com>" if threaded else "",
         references="",
         body_text=body_text,
         draft_kind="first_response",
@@ -264,6 +284,7 @@ def create_pre_offer_message(
     human_notifier: Any | None = None,
 ) -> dict[str, Any]:
     """Send one operational message after re-reading its durable event/deal."""
+    assert_restore_reconciled()
     if not _enabled("HERMES_ALLOW_PRE_OFFER_SEND"):
         return {"action": "blocked", "reason": "pre_offer_send_gate_disabled"}
     if approval != APPROVAL_PHRASE:
@@ -286,7 +307,9 @@ def create_pre_offer_message(
             registry.update_outbox_policy(
                 operation_id,
                 message_type=current_type if current_type in MESSAGE_TYPES else MANUAL_REVIEW,
-                status="manual_review",
+            )
+            registry.finalize_response_attempt(
+                operation_id, outcome="manual_review", reason_codes=[durable_or_error],
             )
         notified, notification_error = _notify_human(
             human_notifier,
@@ -376,10 +399,13 @@ def create_pre_offer_message(
                 draft_id=draft_id,
                 content_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
             )
-        registry.update_outbox_policy(
+        registry.update_outbox_policy(operation_id, message_type=FINAL_OFFER)
+        registry.finalize_response_attempt(
             operation_id,
-            message_type=FINAL_OFFER,
-            status="draft_created" if draft_result.get("action") == "created" and draft_id else "manual_review",
+            outcome="draft_created" if draft_result.get("action") == "created" and draft_id else "manual_review",
+            external_draft_id=draft_id,
+            provider_evidence={"provider_draft_id": draft_id} if draft_id else {},
+            reason_codes=[] if draft_id else ["final_offer_draft_creation_failed"],
         )
         notified, notification_error = _notify_human(
             human_notifier,
@@ -403,7 +429,10 @@ def create_pre_offer_message(
         }
     if decision.effective_type == MANUAL_REVIEW:
         security_id = _record_security(registry, "unknown_message_type", context)
-        registry.update_outbox_policy(operation_id, message_type=durable_type, status="manual_review")
+        registry.update_outbox_policy(operation_id, message_type=durable_type)
+        registry.finalize_response_attempt(
+            operation_id, outcome="manual_review", reason_codes=["manual_review_required"],
+        )
         notified, notification_error = _notify_human(
             human_notifier,
             {"event": "message_manual_review_required", "deal_id": context.get("deal_id")},
@@ -416,7 +445,7 @@ def create_pre_offer_message(
             "human_notification_error": notification_error,
         }
 
-    if _enabled("HERMES_TRANSPORT_KILL_SWITCH"):
+    if _transport_kill_switch_enabled():
         security_id = _record_security(registry, "transport_kill_switch_block", context)
         blocked_draft_result: dict[str, Any] = {"action": "not_created", "reason": "blocked_draft_fallback_unavailable"}
         if blocked_draft_fallback is not None:
@@ -438,10 +467,12 @@ def create_pre_offer_message(
                 draft_id=draft_id,
                 content_hash=_transport_content_hash(payload),
             )
-        registry.update_outbox_policy(
-            operation_id,
-            message_type=decision.effective_type,
-            status="draft_created" if draft_created else "manual_review",
+        registry.update_outbox_policy(operation_id, message_type=decision.effective_type)
+        registry.finalize_response_attempt(
+            operation_id, outcome="draft_created" if draft_created else "manual_review",
+            external_draft_id=draft_id,
+            provider_evidence={"provider_draft_id": draft_id} if draft_id else {},
+            reason_codes=[] if draft_created else ["transport_kill_switch_enabled"],
         )
         notified, notification_error = _notify_human(
             human_notifier,
@@ -465,11 +496,25 @@ def create_pre_offer_message(
     recipient = str(payload.get("toAddress") or "").strip().lower()
     if not _recipient_allowed_in_test_mode(recipient):
         security_id = _record_security(registry, "test_recipient_not_allowed", context)
-        registry.update_outbox_policy(operation_id, message_type=decision.effective_type, status="manual_review")
+        registry.update_outbox_policy(operation_id, message_type=decision.effective_type)
+        registry.finalize_response_attempt(
+            operation_id, outcome="manual_review", reason_codes=["test_recipient_not_allowed"],
+        )
         return {"action": "blocked", "reason": "test_recipient_not_allowed", "security_event_id": security_id}
 
-    canonical_kind = _assert_pre_offer_kind(decision.effective_type)
-    _validate_transport_payload(payload, threaded=threaded)
+    try:
+        canonical_kind = _assert_pre_offer_kind(decision.effective_type)
+        _validate_transport_payload(payload, threaded=threaded)
+    except Exception as exc:
+        reason = f"pre_post_validation:{exc.__class__.__name__}:{str(exc)[:160]}"
+        registry.finalize_response_attempt(
+            operation_id, outcome="validation_failed", reason_codes=[reason],
+            rejected_body=str(payload.get("content") or ""), validation_errors=[str(exc)],
+        )
+        return {"action": "blocked", "reason": reason}
+    if not registry.mark_content_validated(operation_id):
+        security_id = _record_security(registry, "content_validation_transition_failed", context)
+        return {"action": "blocked", "reason": "content_validation_transition_failed", "security_event_id": security_id}
     # Re-read once more immediately before changing the claim to in-progress.
     # This closes the race between initial validation/content classification and
     # the actual provider call if a deal, recipient, thread or durable policy is
@@ -499,7 +544,10 @@ def create_pre_offer_message(
             )
         )
         security_id = _record_security(registry, reason, context, reason=reason)
-        registry.update_outbox_policy(operation_id, message_type=decision.effective_type, status="manual_review")
+        registry.update_outbox_policy(operation_id, message_type=decision.effective_type)
+        registry.finalize_response_attempt(
+            operation_id, outcome="manual_review", reason_codes=[str(reason)],
+        )
         notified, notification_error = _notify_human(
             human_notifier,
             {
@@ -516,6 +564,10 @@ def create_pre_offer_message(
             "human_notified": notified,
             "human_notification_error": notification_error,
         }
+    if not registry.mark_transport_starting(operation_id):
+        security_id = _record_security(registry, "pre_transport_transition_lost", context)
+        return {"action": "blocked", "reason": "pre_transport_transition_lost", "security_event_id": security_id}
+    assert_restore_reconciled()
     if not registry.mark_outbox_in_progress(operation_id):
         security_id = _record_security(registry, "pre_transport_claim_lost", context)
         return {"action": "blocked", "reason": "pre_transport_claim_lost", "security_event_id": security_id}
@@ -550,8 +602,12 @@ def create_pre_offer_message(
     external_id = _external_message_id(response)
     if status in SUCCESS_STATUSES:
         if not external_id:
-            canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            external_id = "zoho-accepted:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+            registry.mark_outbox_outcome_unknown(operation_id, error="provider_accept_without_message_id")
+            security_id = _record_security(registry, "send_outcome_unknown", context, status=status)
+            return {
+                "action": "error", "status": status, "reason": "provider_evidence_missing",
+                "outcome_unknown": True, "security_event_id": security_id, "message_kind": canonical_kind,
+            }
         if not registry.complete_outbox(operation_id, external_message_id=external_id):
             registry.mark_outbox_outcome_unknown(operation_id, error="sent_but_outbox_commit_not_confirmed")
             security_id = _record_security(registry, "send_outcome_unknown", context)
@@ -574,10 +630,12 @@ def create_pre_offer_message(
         registry.mark_outbox_outcome_unknown(operation_id, error="transport_timeout_or_unavailable")
         _record_security(registry, "send_outcome_unknown", context, status=status)
     else:
-        registry.fail_outbox(
+        retryable = status == 429 or status >= 500
+        registry.finalize_response_attempt(
             operation_id,
-            error=str(response.get("error") or f"http_status_{status}"),
-            retryable=status == 429 or status >= 500,
+            outcome="retry_scheduled" if retryable else "validation_failed",
+            reason_codes=[str(response.get("error") or f"http_status_{status}")],
+            provider_evidence={"provider_rejected": True, "http_status": status},
         )
     return {
         "action": "error",

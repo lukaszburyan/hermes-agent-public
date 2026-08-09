@@ -11,7 +11,7 @@ Use this skill only after `mail-lead-pipeline` has classified a shared deal from
 
 Use the split policy from `mail-lead-pipeline/references/pre-offer-autosend-rollout.md`:
 
-- when final-offer blockers remain, automatically send only a short, price-free missing-data response through the gated pre-offer transport;
+- when a true final-offer blocker remains, automatically send only a short, price-free missing-data response through the gated pre-offer transport;
 - when data is complete, create only a Zoho draft in the existing reply thread, attach the validated PDF, and never send it;
 - the missing-data transport must reject prices, offers and attachments, while the complete-offer path must have no send operation.
 
@@ -62,15 +62,16 @@ Load references only when needed:
    - whether CRM is wanted,
    - source of quote requests: mail, form, or both, when available,
    - whether the client has sample quote requests, when available.
-4. Block PDF only for pricing or offer-identity blockers: missing company, missing email, missing number of mailboxes, missing CRM decision, or a safety gate. Do not block PDF only because the source of quote requests or sample quote requests are unknown.
+4. Resolve every commercial fact as `known`, `unknown_confirmed`, `assumed`, `conflicting`, or `not_asked`. Block PDF for a company/email identity gap, a conflicting price fact, or a safety gate. An unknown mailbox count uses an explicit one-mailbox start assumption; an unknown CRM decision produces a base offer without CRM plus a clearly priced CRM option. Monthly volume, current process, inquiry source, and sample requests improve the description or ROI but do not block pricing.
 5. If any blocker is missing, persist type `missing_data_request`, atomically claim a pre-offer outbox operation and automatically send only a short, price-free message through the narrow gated transport. Persist newly validated facts and the accepted external message ID. On `outcome_unknown`, reconcile exact marker, Message-ID and thread in Zoho before any retry; unresolved operations require review.
 6. If data is complete, persist and atomically claim `final_offer`, read `approved/pricing.json`, calculate net price, build offer JSON, render HTML/PDF, validate the PDF, upload it, verify attachment confirmation, and then prepare a threaded mail draft. Do not mark `offer_ready` unless Zoho returned a durable draft ID and PDF attachment confirmation succeeded. Any attempted send of this type must be recorded as a security event and redirected to draft+human notification.
 7. Record offer number, price, concise scope, final draft ID and thread location in the shared deal. Propagate `oferta gotowa` to every linked Sheet row.
 8. Save the offer JSON and CRM notes in Obsidian through the Mac bridge when available.
 9. Notify Łukasz on Telegram and at the hard-allowlisted internal address. Include company, contact, scope, price and exact draft location. Do not send the customer email. If internal email delivery fails, retry only the notification from a private outbox; a deterministic delivery ledger must prevent duplicates after provider acceptance. Notification retry must never recreate the draft, upload the PDF again, or send anything to the customer.
 10. A rerun, another source adapter, or a scheduled tick must reuse the recorded final artifact and create no duplicate.
-11. After a state restore, do not run this skill while `rfq-state/RESTORE_RECONCILIATION_REQUIRED` exists. Reconcile Zoho draft/sent IDs, thread markers, outbox and linked Sheets rows first; removing that flag is a separate human-approved production action.
-12. Treat a release-monitor alarm for `final_offer_autosend_attempt`, recipient/thread mismatch, `outcome_unknown`, stale backup, stale heartbeat or legacy scheduler as a production stop, not an informational warning.
+11. When the owner manually sends the final draft, the Sent observer must match the exact marker, PDF hash, recipient and thread, then persist `sent_manually`, provider message ID and send time. A restart must neither recreate the draft nor send anything.
+12. After a state restore, do not run this skill while `rfq-state/RESTORE_RECONCILIATION_REQUIRED` exists. Reconcile Zoho draft/sent IDs, thread markers, outbox, lifecycle inventory and linked Sheets rows first; removing that flag is a separate human-approved production action.
+13. Treat a release-monitor alarm for `final_offer_autosend_attempt`, recipient/thread mismatch, `outcome_unknown`, stale backup, stale heartbeat, behavior drift, notifier backlog or legacy scheduler as a production stop, not an informational warning.
 
 ## Deterministic Helper
 
@@ -87,7 +88,7 @@ Add `--render-pdf` only in an environment where WeasyPrint is installed. Add `--
 
 The helper:
 - validates required data and safety gates,
-- returns missing questions instead of rendering a PDF when data is incomplete,
+- returns missing questions only for true blockers; approved assumptions and optional variants remain visible in the offer,
 - calculates price from `approved/pricing.json`,
 - builds offer JSON,
 - renders HTML with Jinja and PDF with WeasyPrint when available,

@@ -41,7 +41,7 @@ def register_mail(
     in_reply_to: str = "",
     references: str = "",
     rfc_message_id: str = "",
-    email: str = "identity-119@example.invalid",
+    email: str = "identity-093@customer-061.example.com",
     company: str = "Firma",
     facts: dict | None = None,
     contact_name: str = "Jan Kowalski",
@@ -98,7 +98,7 @@ def seed_crm_and_telegram(registry: UnifiedLeadRegistry):
         subject="Automatyzacja CRM",
         body="Automatyzacja leadów w HubSpot i pipeline sprzedażowy.",
         thread_id="thread-crm",
-        rfc_message_id="<identity-120@example.invalid>",
+        rfc_message_id="<identity-094@customer-061.example.com>",
         facts={"service": "CRM", "integration": "HubSpot", "pipeline": "sprzedażowy"},
     )
     telegram = register_mail(
@@ -107,7 +107,7 @@ def seed_crm_and_telegram(registry: UnifiedLeadRegistry):
         subject="Integracja Telegrama",
         body="To nowy projekt: bot Telegram, grupa i powiadomienia.",
         thread_id="thread-telegram",
-        rfc_message_id="<identity-121@example.invalid>",
+        rfc_message_id="<identity-095@customer-061.example.com>",
         facts={"service": "Telegram", "integration": "bot", "target": "grupa"},
     )
     assert crm["deal_id"] != telegram["deal_id"]
@@ -346,8 +346,8 @@ def test_12_in_reply_to_precedes_subject_of_another_deal(registry):
         key="reply-header-wins",
         subject="Re: Integracja Telegrama",
         body="Odpowiadam w sprawie tego zakresu.",
-        in_reply_to="<identity-120@example.invalid>",
-        references="<identity-120@example.invalid>",
+        in_reply_to="<identity-094@customer-061.example.com>",
+        references="<identity-094@customer-061.example.com>",
     )
     assert_action(event, "link_existing")
     assert event["deal_id"] == crm["deal_id"]
@@ -362,7 +362,7 @@ def test_13_conflicting_hard_signals_require_review(registry):
         subject="Re: Automatyzacja CRM",
         body="Odpowiedź.",
         thread_id="thread-crm",
-        in_reply_to="<identity-121@example.invalid>",
+        in_reply_to="<identity-095@customer-061.example.com>",
     )
     assert_action(event, "review")
     assert event["requires_review"] is True
@@ -427,7 +427,7 @@ def test_16_same_sender_can_have_three_or_more_active_deals(registry):
     assert len(ids) == 4
     rows = registry.connection.execute(
         "SELECT deal_id FROM unified_deals WHERE primary_email=? AND status NOT IN ('closed','lost','cancelled','archived')",
-        ("identity-119@example.invalid",),
+        ("identity-093@customer-061.example.com",),
     ).fetchall()
     assert ids <= {str(row["deal_id"]) for row in rows}
 
@@ -534,7 +534,7 @@ def test_new_mail_scope_is_not_linked_to_sheet_deal_by_email_alone(registry):
     sheet = registry.register_event(
         source_type="google_sheets",
         source_key="sheet:new-scope:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Automatyzacja CRM, HubSpot i pipeline sprzedażowy.",
@@ -545,7 +545,7 @@ def test_new_mail_scope_is_not_linked_to_sheet_deal_by_email_alone(registry):
     event = registry.register_event(
         source_type="mail",
         source_key="mail:new-scope:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Potrzebujemy OCR faktur i eksportu do księgowości.",
@@ -593,7 +593,7 @@ def test_cross_source_same_boilerplate_with_new_informative_subject_is_not_dupli
     original = registry.register_event(
         source_type="google_sheets",
         source_key="sheet:boilerplate:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Proszę o kontakt.",
@@ -603,7 +603,7 @@ def test_cross_source_same_boilerplate_with_new_informative_subject_is_not_dupli
     event = registry.register_event(
         source_type="mail",
         source_key="mail:boilerplate:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Proszę o kontakt.",
@@ -655,7 +655,7 @@ def test_cross_source_one_word_topics_do_not_deduplicate_by_body_alone(registry)
     original = registry.register_event(
         source_type="google_sheets",
         source_key="sheet:one-word:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Proszę o kontakt.",
@@ -665,7 +665,7 @@ def test_cross_source_one_word_topics_do_not_deduplicate_by_body_alone(registry)
     event = registry.register_event(
         source_type="mail",
         source_key="mail:one-word:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Firma",
         contact_name="Jan Kowalski",
         content="Proszę o kontakt.",
@@ -686,7 +686,7 @@ def test_sheet_lead_same_email_different_topic_creates_new_deal(registry):
     piotr = register_sheet(
         registry,
         key="sheet:piotr:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Nowak-Logistics Sp. z o.o.",
         contact_name="Piotr",
         message="Prowadzę firmę logistyczną i szukamy systemu do obsługi zapytań od klientów. Obecnie zapytania obsługujemy mailem. Proszę o kontakt i ofertę.",
@@ -694,7 +694,7 @@ def test_sheet_lead_same_email_different_topic_creates_new_deal(registry):
     marek = register_sheet(
         registry,
         key="sheet:marek:1",
-        email="identity-119@example.invalid",
+        email="identity-093@customer-061.example.com",
         company="Wiśniewski Budownictwo Sp. z o.o.",
         contact_name="Marek",
         message=(

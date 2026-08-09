@@ -180,18 +180,21 @@ def test_any_attachment_shaped_payload_is_blocked_at_transport_boundary(
     payload = reply_payload()
     payload[field] = ["attachment-1"]
     poster = FakePoster()
-    with pytest.raises(PermissionError, match="pre_offer_attachments_forbidden"):
-        create_pre_offer_message(
-            "acc-1",
-            source_message_id="source-1",
-            payload=payload,
-            poster=poster,
-            approval=APPROVAL_PHRASE,
-            message_kind="clarification_request",
-            threaded=True,
-            durable_context=context,
-        )
+    result = create_pre_offer_message(
+        "acc-1",
+        source_message_id="source-1",
+        payload=payload,
+        poster=poster,
+        approval=APPROVAL_PHRASE,
+        message_kind="clarification_request",
+        threaded=True,
+        durable_context=context,
+    )
     assert poster.reply_calls == []
+    assert result["action"] == "blocked"
+    assert "pre_offer_attachments_forbidden" in result["reason"]
+    assert registry.outbox_operation("operation-1")["status"] == "validation_failed"
+    assert registry.review_tasks()[0]["validation_errors"] == ["pre_offer_attachments_forbidden"]
     registry.close()
 
 
@@ -319,6 +322,30 @@ def test_transport_kill_switch_blocks_post_but_preserves_durable_event(monkeypat
     registry.close()
 
 
+def test_monitor_kill_switch_file_blocks_post_without_container_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    marker = tmp_path / "TRANSPORT_KILL_SWITCH"
+    marker.write_text("critical\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_ALLOW_PRE_OFFER_SEND", "1")
+    monkeypatch.setenv("HERMES_TRANSPORT_KILL_SWITCH", "0")
+    monkeypatch.setenv("HERMES_TRANSPORT_KILL_SWITCH_FILE", str(marker))
+    registry, context = durable_context(tmp_path)
+    poster = FakePoster()
+
+    result = create_pre_offer_message(
+        "acc-1", source_message_id="source-1", payload=reply_payload(), poster=poster,
+        approval=APPROVAL_PHRASE, message_kind="clarification_request", threaded=True,
+        durable_context=context,
+    )
+
+    assert result["reason"] == "transport_kill_switch_enabled"
+    assert poster.reply_calls == []
+    assert registry.outbox_operation("operation-1")["status"] == "manual_review"
+    assert registry.review_tasks()[0]["reason_codes"] == ["transport_kill_switch_enabled"]
+    registry.close()
+
+
 def test_test_mode_requires_allowlisted_recipient(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("HERMES_ALLOW_PRE_OFFER_SEND", "1")
     monkeypatch.setenv("HERMES_TEST_MODE", "1")
@@ -338,7 +365,7 @@ def test_test_mode_requires_allowlisted_recipient(monkeypatch: pytest.MonkeyPatc
 def test_transport_accepts_dotted_gmail_when_durable_identity_is_canonicalized(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ):
-    recipient = "identity-008@example.invalid"
+    recipient = "identity-004@gmail.com"
     monkeypatch.setenv("HERMES_ALLOW_PRE_OFFER_SEND", "1")
     monkeypatch.setenv("HERMES_TEST_MODE", "1")
     monkeypatch.setenv("HERMES_TEST_RECIPIENT_ALLOWLIST", recipient)

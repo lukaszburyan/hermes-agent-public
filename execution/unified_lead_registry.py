@@ -63,7 +63,7 @@ MAX_CONVERSATION_AGE_DAYS = 7
 # Public policy constants make every score reproducible in tests and audits.
 ROUTING_WEIGHT_THREAD_ID = 1.00
 ROUTING_WEIGHT_REPLY_REFERENCE = 0.95
-ROUTING_WEIGHT_EXACT_SUBJECT = 0.80
+ROUTING_WEIGHT_EXACT_SUBJECT = 0.20
 ROUTING_WEIGHT_STRONG_SEMANTIC = 0.65
 ROUTING_WEIGHT_ENTITY_MATCH = 0.50
 ROUTING_WEIGHT_COMPANY = 0.30
@@ -77,10 +77,17 @@ ROUTING_REVIEW_THRESHOLD = 0.80
 ROUTING_REVIEW_MARGIN = 0.15
 ROUTING_CREATE_NEW_MAX_SCORE = 0.45
 
-OUTBOX_TERMINAL_STATUSES = {"sent", "draft_created", "manual_review", "permanent_failed"}
+OUTBOX_TERMINAL_STATUSES = {
+    "sent", "sent_manually", "draft_created", "manual_review", "validation_failed", "permanent_failed"
+}
 OUTBOX_RECONCILIATION_STATUSES = {"in_progress", "outcome_unknown"}
 OUTBOX_STATUSES = OUTBOX_TERMINAL_STATUSES | OUTBOX_RECONCILIATION_STATUSES | {
-    "claimed", "retryable_failed"
+    "claimed", "retryable_failed", "retry_scheduled"
+}
+RESPONSE_PHASES = {
+    "preparing", "content_validated", "transport_starting", "post_started", "sent",
+    "sent_manually", "draft_created", "validation_failed", "manual_review", "retry_scheduled",
+    "outcome_unknown",
 }
 
 
@@ -145,10 +152,129 @@ def _migration_003_durable_contact_identity(connection: sqlite3.Connection) -> N
     )
 
 
+def _migration_004_response_lifecycle(connection: sqlite3.Connection) -> None:
+    """Expand-only response lifecycle, review queue and source evidence."""
+    for column, declaration in (
+        ("phase", "TEXT NOT NULL DEFAULT ''"),
+        ("post_started_at", "TEXT"),
+        ("terminal_at", "TEXT"),
+        ("provider_evidence_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("validation_errors_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        add_column_if_missing(connection, "unified_outbox", column, declaration)
+    for column, declaration in (
+        ("phase", "TEXT NOT NULL DEFAULT ''"),
+        ("terminal_at", "TEXT"),
+        ("provider_evidence_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        add_column_if_missing(connection, "unified_artifacts", column, declaration)
+    for column, declaration in (
+        ("resolved_reply_recipient", "TEXT NOT NULL DEFAULT ''"),
+        ("recipient_evidence_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("content_version", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        add_column_if_missing(connection, "unified_events", column, declaration)
+    lifecycle_schema = """
+        CREATE TABLE IF NOT EXISTS unified_review_tasks (
+          task_id TEXT PRIMARY KEY,
+          source_type TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          deal_id TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          reason_codes_json TEXT NOT NULL DEFAULT '[]',
+          rejected_body TEXT NOT NULL DEFAULT '',
+          validation_errors_json TEXT NOT NULL DEFAULT '[]',
+          recipient TEXT NOT NULL DEFAULT '',
+          provider_evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          sla_at TEXT NOT NULL,
+          notification_status TEXT NOT NULL DEFAULT 'pending',
+          status TEXT NOT NULL DEFAULT 'open',
+          updated_at TEXT NOT NULL,
+          UNIQUE(operation_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_unified_review_tasks_open
+          ON unified_review_tasks(status, notification_status, sla_at);
+        CREATE TABLE IF NOT EXISTS unified_source_dispositions (
+          source_type TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          deal_id TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          disposition TEXT NOT NULL,
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(source_type, source_key)
+        );
+        CREATE TABLE IF NOT EXISTS unified_response_events (
+          event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          operation_id TEXT NOT NULL,
+          deal_id TEXT NOT NULL,
+          previous_phase TEXT NOT NULL,
+          new_phase TEXT NOT NULL,
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_unified_response_events_operation
+          ON unified_response_events(operation_id, event_id);
+        CREATE TABLE IF NOT EXISTS unified_validation_attempts (
+          attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          operation_id TEXT NOT NULL,
+          deal_id TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL,
+          prompt_version TEXT NOT NULL,
+          contract_digest TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          error_codes_json TEXT NOT NULL DEFAULT '[]',
+          offending_spans_json TEXT NOT NULL DEFAULT '[]',
+          sanitizer_actions_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          UNIQUE(operation_id, attempt_number)
+        );
+        CREATE TABLE IF NOT EXISTS unified_source_versions (
+          source_type TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          content_version TEXT NOT NULL,
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          PRIMARY KEY(source_type, source_key, content_version)
+        );
+        CREATE TABLE IF NOT EXISTS unified_manual_sends (
+          deal_id TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          external_message_id TEXT NOT NULL,
+          sent_at TEXT NOT NULL,
+          marker TEXT NOT NULL,
+          pdf_hash TEXT NOT NULL DEFAULT '',
+          recipient TEXT NOT NULL,
+          thread_id TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(deal_id, stage),
+          UNIQUE(external_message_id)
+        );
+        """
+    for statement in lifecycle_schema.split(";"):
+        if statement.strip():
+            connection.execute(statement)
+    connection.execute(
+        "UPDATE unified_outbox SET phase=CASE status "
+        "WHEN 'claimed' THEN 'preparing' WHEN 'in_progress' THEN 'post_started' "
+        "WHEN 'retryable_failed' THEN 'retry_scheduled' WHEN 'permanent_failed' THEN 'validation_failed' "
+        "ELSE status END WHERE phase=''"
+    )
+    connection.execute(
+        "UPDATE unified_artifacts SET phase=CASE "
+        "WHEN outcome='claimed' THEN 'preparing' WHEN outcome='in_progress' THEN 'post_started' "
+        "WHEN outcome='retryable_failed' THEN 'retry_scheduled' WHEN outcome='permanent_failed' THEN 'validation_failed' "
+        "WHEN outcome!='' THEN outcome ELSE status END WHERE phase=''"
+    )
+
+
 REGISTRY_MIGRATIONS = (
     Migration(1, "durable_outbox_and_claim_metadata", _migration_001_durable_outbox),
     Migration(2, "auditable_security_event_resolution", _migration_002_security_event_resolution),
     Migration(3, "durable_contact_identity", _migration_003_durable_contact_identity),
+    Migration(4, "authoritative_response_lifecycle", _migration_004_response_lifecycle),
 )
 
 
@@ -325,6 +451,7 @@ class UnifiedLeadRegistry:
                 namespace="unified_lead_registry",
                 migrations=REGISTRY_MIGRATIONS,
             )
+            self._backfill_legacy_review_tasks()
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -524,6 +651,91 @@ class UnifiedLeadRegistry:
             "INSERT OR IGNORE INTO unified_deal_identities(deal_id,identity_type,identity_value,created_at) "
             "SELECT deal_id,identity_type,identity_value,created_at FROM unified_identities"
         )
+
+    def _backfill_legacy_review_tasks(self) -> int:
+        """Give pre-v4 ``review_required`` deals one durable, no-send task."""
+        rows = self.connection.execute(
+            "SELECT d.deal_id,d.primary_email FROM unified_deals d WHERE d.status='review_required' "
+            "AND NOT EXISTS (SELECT 1 FROM unified_review_tasks t WHERE t.deal_id=d.deal_id AND t.status='open') "
+            "ORDER BY d.created_at,d.deal_id"
+        ).fetchall()
+        if not rows:
+            return 0
+        now = utc_now()
+        sla_at = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(timespec="seconds")
+        reason = "legacy_review_state_backfill"
+        created = 0
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            for deal in rows:
+                deal_id = str(deal["deal_id"])
+                unresolved = self.connection.execute(
+                    "SELECT operation_id,source_type,source_key,recipient FROM unified_outbox WHERE deal_id=? "
+                    "AND status IN ('claimed','retryable_failed','retry_scheduled','in_progress','outcome_unknown') "
+                    "ORDER BY created_at DESC,operation_id DESC LIMIT 1",
+                    (deal_id,),
+                ).fetchone()
+                event = self.connection.execute(
+                    "SELECT source_type,source_key,email FROM unified_events WHERE deal_id=? "
+                    "ORDER BY event_id DESC LIMIT 1",
+                    (deal_id,),
+                ).fetchone()
+                source_type = str(
+                    unresolved["source_type"] if unresolved else event["source_type"] if event else "legacy_registry"
+                )
+                source_key = str(
+                    unresolved["source_key"] if unresolved else event["source_key"] if event else f"deal:{deal_id}"
+                )
+                recipient = normalize_email(str(
+                    (unresolved["recipient"] if unresolved else "")
+                    or (event["email"] if event else "") or deal["primary_email"] or ""
+                ))
+                operation_id = str(
+                    unresolved["operation_id"] if unresolved else "legacy-review-state:" + digest(deal_id)
+                )
+                task_id = "review-" + digest(operation_id)[:28]
+                evidence = {
+                    "legacy_migration": True,
+                    "provider_evidence": "unavailable",
+                    "send_capability": False,
+                    "bound_unresolved_operation": bool(unresolved),
+                }
+                cursor = self.connection.execute(
+                    "INSERT INTO unified_review_tasks(task_id,source_type,source_key,deal_id,operation_id,reason_codes_json,"
+                    "rejected_body,validation_errors_json,recipient,provider_evidence_json,created_at,sla_at,"
+                    "notification_status,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?) "
+                    "ON CONFLICT(operation_id) DO UPDATE SET reason_codes_json=excluded.reason_codes_json,"
+                    "rejected_body=excluded.rejected_body,validation_errors_json=excluded.validation_errors_json,"
+                    "recipient=excluded.recipient,provider_evidence_json=excluded.provider_evidence_json,"
+                    "notification_status=CASE WHEN unified_review_tasks.status='open' "
+                    "AND unified_review_tasks.notification_status='sent' THEN 'sent' ELSE 'pending' END,"
+                    "status='open',updated_at=excluded.updated_at",
+                    (
+                        task_id, source_type, source_key, deal_id, operation_id, canonical_json([reason]),
+                        "[legacy rejected body unavailable]", canonical_json([reason]), recipient,
+                        canonical_json(evidence), now, sla_at, "pending", now,
+                    ),
+                )
+                created += int(cursor.rowcount > 0)
+                if not unresolved:
+                    self.connection.execute(
+                        "INSERT INTO unified_response_events(operation_id,deal_id,previous_phase,new_phase,evidence_json,created_at) "
+                        "SELECT ?,?,'legacy','manual_review',?,? WHERE NOT EXISTS (SELECT 1 FROM unified_response_events "
+                        "WHERE operation_id=? AND previous_phase='legacy' AND new_phase='manual_review')",
+                        (
+                            operation_id, deal_id,
+                            canonical_json({"review_task_id": task_id, "reason_codes": [reason], **evidence}),
+                            now, operation_id,
+                        ),
+                    )
+            self.connection.execute("COMMIT")
+            return created
+        except Exception:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
 
     def close(self) -> None:
         self.connection.close()
@@ -919,7 +1131,7 @@ class UnifiedLeadRegistry:
 
             if normalized_subject and not is_generic_subject(subject) and normalized_subject in dossier["subjects"]:
                 score += ROUTING_WEIGHT_EXACT_SUBJECT
-                used.append("score:exact_subject:+0.80")
+                used.append(f"score:exact_subject:+{ROUTING_WEIGHT_EXACT_SUBJECT:.2f}")
 
             overlap = incoming_tokens & candidate_tokens
             similarity = len(overlap) / max(1, len(incoming_tokens | candidate_tokens))
@@ -1115,21 +1327,6 @@ class UnifiedLeadRegistry:
                 "explicit_new_matter",
             ), False
 
-        normalized_subject = normalize_subject(subject)
-        exact_subject_hits = [
-            candidate for candidate in candidates
-            if normalized_subject
-            and not is_generic_subject(subject)
-            and normalized_subject in self._candidate_dossier(candidate)["subjects"]
-        ]
-        if len(exact_subject_hits) == 1:
-            target = exact_subject_hits[0]
-            return DealRoutingDecision(
-                "link_existing", target, ROUTING_WEIGHT_EXACT_SUBJECT, ROUTING_WEIGHT_EXACT_SUBJECT,
-                ["hard:exact_normalized_subject"] + score_evidence.get(target, []), scores,
-                "unique_exact_subject",
-            ), False
-
         if not candidates:
             return DealRoutingDecision(
                 "create_new", "", 1.0, 1.0, ["no_active_deals"], {}, "no_active_deals"
@@ -1263,6 +1460,13 @@ class UnifiedLeadRegistry:
                 "SELECT * FROM unified_events WHERE source_type=? AND source_key=?", (source_type, source_key)
             ).fetchone()
             if existing:
+                content_version = str(metadata.get("content_hash") or digest(content))
+                self.connection.execute(
+                    "INSERT INTO unified_source_versions(source_type,source_key,content_version,first_seen_at,last_seen_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(source_type,source_key,content_version) DO UPDATE SET "
+                    "last_seen_at=excluded.last_seen_at",
+                    (source_type, source_key, content_version, now, now),
+                )
                 deal = self.get_deal(str(existing["deal_id"])) or {}
                 audit = self.correlation_audit(source_type, source_key) or {}
                 existing_metadata = json.loads(existing["metadata_json"] or "{}")
@@ -1424,14 +1628,33 @@ class UnifiedLeadRegistry:
                 event_metadata["material_scope_changes"] = material_changes
             if fact_conflicts:
                 event_metadata["fact_conflicts"] = fact_conflicts
+            resolved_recipient = normalize_email(str(event_metadata.get("resolved_reply_recipient") or normalized))
+            recipient_evidence = dict(event_metadata.get("recipient_resolution_evidence") or {})
+            if resolved_recipient and not recipient_evidence:
+                recipient_evidence = {
+                    "source": "registered_event_email",
+                    "resolved_reply_recipient": resolved_recipient,
+                    "reply_all": False,
+                }
+                event_metadata["resolved_reply_recipient"] = resolved_recipient
+                event_metadata["recipient_resolution_evidence"] = recipient_evidence
+            content_version = str(event_metadata.get("content_hash") or digest(content))
             self.connection.execute(
                 "INSERT INTO unified_events("
-                "source_type,source_key,deal_id,relation,email,company,contact_name,content_hash,thread_id,metadata_json,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "source_type,source_key,deal_id,relation,email,company,contact_name,content_hash,thread_id,metadata_json,"
+                "resolved_reply_recipient,recipient_evidence_json,content_version,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     source_type, source_key, deal_id, str(relation or "new"), normalized, str(company or ""),
-                    str(contact_name or ""), digest(content), thread_id, canonical_json(event_metadata), now,
+                    str(contact_name or ""), digest(content), thread_id, canonical_json(event_metadata),
+                    resolved_recipient, canonical_json(recipient_evidence), content_version, now,
                 ),
+            )
+            self.connection.execute(
+                "INSERT INTO unified_source_versions(source_type,source_key,content_version,first_seen_at,last_seen_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(source_type,source_key,content_version) DO UPDATE SET "
+                "last_seen_at=excluded.last_seen_at",
+                (source_type, source_key, content_version, now, now),
             )
             selected = deal_id if decision.action in {"link_existing", "create_new"} else ""
             provisional = deal_id if decision.action == "review" else ""
@@ -1498,12 +1721,16 @@ class UnifiedLeadRegistry:
         reasons: list[str] | tuple[str, ...],
     ) -> dict[str, Any]:
         """Persist the system policy; an existing final offer is irreversible."""
-        from message_policy import AUTO_SEND_TYPES, FINAL_OFFER, MESSAGE_TYPES
+        from message_policy import AUTO_SEND_TYPES, FINAL_OFFER, MANUAL_REVIEW, MESSAGE_TYPES
 
-        if effective_type not in MESSAGE_TYPES:
+        if effective_type not in MESSAGE_TYPES | {MANUAL_REVIEW}:
             raise ValueError("invalid_effective_message_type")
-        expected_transport = "draft_only" if effective_type == FINAL_OFFER else "auto_send"
-        if effective_type not in AUTO_SEND_TYPES and effective_type != FINAL_OFFER:
+        expected_transport = (
+            "draft_only" if effective_type == FINAL_OFFER
+            else "manual_review" if effective_type == MANUAL_REVIEW
+            else "auto_send"
+        )
+        if effective_type not in AUTO_SEND_TYPES and effective_type not in {FINAL_OFFER, MANUAL_REVIEW}:
             raise ValueError("message_type_has_no_transport_policy")
         if transport_mode != expected_transport:
             transport_mode = expected_transport
@@ -1927,7 +2154,80 @@ class UnifiedLeadRegistry:
             "SELECT * FROM unified_outbox WHERE operation_id=?",
             (str(operation_id),),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        result["provider_evidence"] = json.loads(result.pop("provider_evidence_json", "{}") or "{}")
+        result["validation_errors"] = json.loads(result.pop("validation_errors_json", "[]") or "[]")
+        return result
+
+    def _record_response_event_tx(
+        self,
+        *,
+        operation_id: str,
+        deal_id: str,
+        previous_phase: str,
+        new_phase: str,
+        evidence: dict[str, Any] | None = None,
+        now: str,
+    ) -> None:
+        self.connection.execute(
+            "INSERT INTO unified_response_events(operation_id,deal_id,previous_phase,new_phase,evidence_json,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (operation_id, deal_id, previous_phase, new_phase, canonical_json(evidence or {}), now),
+        )
+
+    def mark_response_phase(self, operation_id: str, phase: str) -> bool:
+        """CAS one non-terminal response phase and retain an auditable transition."""
+        if phase not in {"content_validated", "transport_starting", "post_started"}:
+            raise ValueError("invalid_active_response_phase")
+        allowed = {
+            "content_validated": {"preparing"},
+            "transport_starting": {"content_validated"},
+            "post_started": {"transport_starting"},
+        }
+        now = utc_now()
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT deal_id,phase,status FROM unified_outbox WHERE operation_id=?",
+                (str(operation_id),),
+            ).fetchone()
+            if not row:
+                self.connection.execute("ROLLBACK")
+                return False
+            previous = str(row["phase"] or ("preparing" if row["status"] == "claimed" else ""))
+            if previous not in allowed[phase]:
+                self.connection.execute("ROLLBACK")
+                return False
+            status = "in_progress" if phase == "post_started" else "claimed"
+            self.connection.execute(
+                "UPDATE unified_outbox SET status=?,phase=?,post_started_at=CASE WHEN ?='post_started' THEN ? "
+                "ELSE post_started_at END,updated_at=? WHERE operation_id=?",
+                (status, phase, phase, now, now, str(operation_id)),
+            )
+            self.connection.execute(
+                "UPDATE unified_artifacts SET phase=?,outcome=?,updated_at=? WHERE operation_id=?",
+                (phase, phase, now, str(operation_id)),
+            )
+            self._record_response_event_tx(
+                operation_id=str(operation_id), deal_id=str(row["deal_id"]), previous_phase=previous,
+                new_phase=phase, now=now,
+            )
+            self.connection.execute("COMMIT")
+            return True
+        except Exception:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def mark_content_validated(self, operation_id: str) -> bool:
+        return self.mark_response_phase(operation_id, "content_validated")
+
+    def mark_transport_starting(self, operation_id: str) -> bool:
+        return self.mark_response_phase(operation_id, "transport_starting")
 
     def claim_response(
         self,
@@ -1995,11 +2295,12 @@ class UnifiedLeadRegistry:
                 if status == "claimed" and active_until and active_until > now_dt:
                     self.connection.execute("ROLLBACK")
                     return False
-                if status not in {"claimed", "retryable_failed"}:
+                if status not in {"claimed", "retryable_failed", "retry_scheduled"}:
                     self.connection.execute("ROLLBACK")
                     return False
                 self.connection.execute(
-                    "UPDATE unified_outbox SET status='claimed',owner=?,started_at=?,lease_expires_at=?,last_error='',updated_at=? "
+                    "UPDATE unified_outbox SET status='claimed',phase='preparing',owner=?,started_at=?,lease_expires_at=?,"
+                    "last_error='',post_started_at=NULL,terminal_at=NULL,updated_at=? "
                     "WHERE operation_id=?",
                     (owner, now, lease_expires, now, operation_id),
                 )
@@ -2008,8 +2309,8 @@ class UnifiedLeadRegistry:
                     "INSERT INTO unified_outbox("
                     "operation_id,deal_id,source_type,source_key,stage,message_type,recipient,contact_identity,"
                     "thread_id,input_hash,"
-                    "status,owner,started_at,lease_expires_at,marker,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,'claimed',?,?,?,?,?,?)",
+                    "status,phase,owner,started_at,lease_expires_at,marker,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,'claimed','preparing',?,?,?,?,?,?)",
                     (
                         operation_id, deal_id, str(source_type), source_key, stage, message_type, recipient,
                         contact_identity, str(thread_id), str(content_hash), owner, now, lease_expires,
@@ -2019,18 +2320,23 @@ class UnifiedLeadRegistry:
             self.connection.execute(
                 "INSERT INTO unified_artifacts("
                 "deal_id,stage,status,content_hash,created_at,updated_at,operation_id,owner,started_at,lease_expires_at,"
-                "message_type,recipient,contact_identity,source_type,source_key,outcome) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "message_type,recipient,contact_identity,source_type,source_key,outcome,phase) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(deal_id,stage) DO UPDATE SET "
                 "status='creating',content_hash=excluded.content_hash,updated_at=excluded.updated_at,"
                 "operation_id=excluded.operation_id,owner=excluded.owner,started_at=excluded.started_at,"
                 "lease_expires_at=excluded.lease_expires_at,message_type=excluded.message_type,"
                 "recipient=excluded.recipient,contact_identity=excluded.contact_identity,"
-                "source_type=excluded.source_type,source_key=excluded.source_key,outcome='claimed'",
+                "source_type=excluded.source_type,source_key=excluded.source_key,outcome='preparing',phase='preparing'",
                 (
                     deal_id, stage, "creating", str(content_hash), now, now, operation_id, owner, now,
-                    lease_expires, message_type, recipient, contact_identity, str(source_type), source_key, "claimed",
+                    lease_expires, message_type, recipient, contact_identity, str(source_type), source_key,
+                    "preparing", "preparing",
                 ),
+            )
+            self._record_response_event_tx(
+                operation_id=operation_id, deal_id=deal_id, previous_phase="",
+                new_phase="preparing", evidence={"source_type": source_type, "source_key": source_key}, now=now,
             )
             self.connection.execute("COMMIT")
             return True
@@ -2048,17 +2354,7 @@ class UnifiedLeadRegistry:
             raise
 
     def mark_outbox_in_progress(self, operation_id: str) -> bool:
-        now = utc_now()
-        cursor = self.connection.execute(
-            "UPDATE unified_outbox SET status='in_progress',updated_at=? WHERE operation_id=? AND status='claimed'",
-            (now, str(operation_id)),
-        )
-        if cursor.rowcount:
-            self.connection.execute(
-                "UPDATE unified_artifacts SET outcome='in_progress',updated_at=? WHERE operation_id=?",
-                (now, str(operation_id)),
-            )
-        return cursor.rowcount == 1
+        return self.mark_response_phase(operation_id, "post_started")
 
     def bind_outbox_content(self, operation_id: str, *, content_hash: str) -> bool:
         """Bind the exact rendered transport payload while the claim is held."""
@@ -2068,7 +2364,8 @@ class UnifiedLeadRegistry:
         now = utc_now()
         cursor = self.connection.execute(
             "UPDATE unified_outbox SET content_hash=?,updated_at=? "
-            "WHERE operation_id=? AND status='claimed' AND (content_hash='' OR content_hash=?)",
+            "WHERE operation_id=? AND status='claimed' AND phase IN ('preparing','content_validated') "
+            "AND (content_hash='' OR content_hash=?)",
             (value, now, str(operation_id), value),
         )
         if cursor.rowcount:
@@ -2079,7 +2376,8 @@ class UnifiedLeadRegistry:
         return cursor.rowcount == 1
 
     def update_outbox_policy(self, operation_id: str, *, message_type: str, status: str = "") -> None:
-        if message_type not in MESSAGE_TYPES:
+        from message_policy import MANUAL_REVIEW
+        if message_type not in MESSAGE_TYPES | {MANUAL_REVIEW}:
             raise ValueError("invalid_outbox_message_type")
         if status and status not in OUTBOX_STATUSES:
             raise ValueError("invalid_outbox_status")
@@ -2100,70 +2398,700 @@ class UnifiedLeadRegistry:
             (message_type, status, now, str(operation_id)),
         )
 
-    def complete_outbox(self, operation_id: str, *, external_message_id: str) -> bool:
+    def _create_review_task_tx(
+        self,
+        *,
+        operation: sqlite3.Row | dict[str, Any],
+        reason_codes: list[str],
+        rejected_body: str,
+        validation_errors: list[str],
+        provider_evidence: dict[str, Any],
+        now: str,
+    ) -> str:
+        operation_id = str(operation["operation_id"])
+        task_id = "review-" + digest(operation_id)[:28]
+        sla_at = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(timespec="seconds")
+        self.connection.execute(
+            "INSERT INTO unified_review_tasks("
+            "task_id,source_type,source_key,deal_id,operation_id,reason_codes_json,rejected_body,"
+            "validation_errors_json,recipient,provider_evidence_json,created_at,sla_at,"
+            "notification_status,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?) "
+            "ON CONFLICT(operation_id) DO UPDATE SET reason_codes_json=excluded.reason_codes_json,"
+            "rejected_body=excluded.rejected_body,validation_errors_json=excluded.validation_errors_json,"
+            "recipient=excluded.recipient,provider_evidence_json=excluded.provider_evidence_json,"
+            "notification_status=CASE WHEN unified_review_tasks.status='open' "
+            "AND unified_review_tasks.notification_status='sent' THEN 'sent' ELSE 'pending' END,"
+            "status='open',updated_at=excluded.updated_at",
+            (
+                task_id, str(operation["source_type"]), str(operation["source_key"]),
+                str(operation["deal_id"]), operation_id, canonical_json(reason_codes),
+                str(rejected_body or ""), canonical_json(validation_errors), str(operation["recipient"] or ""),
+                canonical_json(provider_evidence), now, sla_at, "pending", now,
+            ),
+        )
+        return task_id
+
+    def ensure_legacy_review_task(
+        self,
+        *,
+        source_key: str,
+        reason_codes: list[str] | tuple[str, ...],
+        rejected_body: str,
+        validation_errors: list[str] | tuple[str, ...] = (),
+        recipient: str = "",
+        provider_evidence: dict[str, Any] | None = None,
+        source_type: str = "legacy_mail",
+    ) -> dict[str, str]:
+        """Create one idempotent terminal review projection for a legacy source.
+
+        Historical pipeline rows can predate the unified event/outbox tables.  A
+        source may be moved out of ``done`` only after this transaction creates
+        its durable deal, event, terminal operation/artifact, source disposition
+        and review task.  The synthetic deal has no identity binding, so it
+        cannot affect routing of later customer mail.  This method has no send
+        capability.
+        """
+        source_key = str(source_key or "").strip()
+        source_type = str(source_type or "legacy_mail").strip()
+        reasons = list(dict.fromkeys(str(item) for item in reason_codes if str(item)))
+        errors = list(dict.fromkeys(str(item) for item in validation_errors if str(item)))
+        body = str(rejected_body or "").strip()
+        if not source_key or not source_type or not reasons or not body:
+            raise ValueError("legacy_review_requires_source_reasons_and_rejected_body")
+        recipient = normalize_email(recipient)
+        contact_identity = contact_identity_for_email(recipient)
+        evidence = {"legacy_reconciliation": True, **dict(provider_evidence or {})}
+        fingerprint = digest(f"{source_type}:{source_key}")
+        deal_id = "legacy-deal-" + fingerprint[:24]
+        operation_id = "legacy-review:" + fingerprint
+        stage = "legacy_reconciliation"
+        now = utc_now()
+        content_hash = digest(body)
+        recipient_evidence = {
+            "source": "legacy_state",
+            "resolved_reply_recipient": recipient,
+            "reply_all": False,
+            "resolution": "resolved" if recipient else "unavailable",
+        }
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            self.connection.execute(
+                "INSERT INTO unified_deals(deal_id,status,primary_email,company,contact_name,facts_json,context_json,"
+                "scope_display,is_correlation_case,created_at,updated_at) VALUES(?, 'review_required', ?, '', '', '{}',"
+                "'[]', ?, 1, ?, ?) ON CONFLICT(deal_id) DO UPDATE SET status='review_required',scope_display=excluded.scope_display,"
+                "updated_at=excluded.updated_at",
+                (deal_id, recipient or None, ",".join(reasons)[:500], now, now),
+            )
+            self.connection.execute(
+                "INSERT INTO unified_events(source_type,source_key,deal_id,relation,email,company,contact_name,content_hash,"
+                "thread_id,metadata_json,resolved_reply_recipient,recipient_evidence_json,content_version,created_at) "
+                "VALUES(?,?,?,'legacy',?,'','',?,'',?,?,?,?,?) ON CONFLICT(source_type,source_key) DO NOTHING",
+                (
+                    source_type, source_key, deal_id, recipient or None, content_hash,
+                    canonical_json({"legacy_reconciliation": True, "provider_evidence": evidence}),
+                    recipient, canonical_json(recipient_evidence), content_hash, now,
+                ),
+            )
+            self.connection.execute(
+                "INSERT INTO unified_outbox(operation_id,deal_id,source_type,source_key,stage,message_type,recipient,"
+                "contact_identity,thread_id,input_hash,content_hash,status,phase,owner,started_at,lease_expires_at,marker,"
+                "last_error,created_at,updated_at,terminal_at,provider_evidence_json,validation_errors_json) "
+                "VALUES(?,?,?,?,?,'manual_review',?,?, '',?,?, 'manual_review','manual_review','','','','',?,?,?, ?,?,?) "
+                "ON CONFLICT(operation_id) DO UPDATE SET status='manual_review',phase='manual_review',owner='',started_at='',"
+                "lease_expires_at='',last_error=excluded.last_error,terminal_at=excluded.terminal_at,"
+                "provider_evidence_json=excluded.provider_evidence_json,validation_errors_json=excluded.validation_errors_json,"
+                "updated_at=excluded.updated_at",
+                (
+                    operation_id, deal_id, source_type, source_key, stage, recipient, contact_identity,
+                    fingerprint, content_hash, ",".join(reasons)[:500], now, now, now,
+                    canonical_json(evidence), canonical_json(errors),
+                ),
+            )
+            self.connection.execute(
+                "INSERT INTO unified_artifacts(deal_id,stage,status,content_hash,created_at,updated_at,operation_id,owner,"
+                "started_at,lease_expires_at,message_type,recipient,contact_identity,source_type,source_key,outcome,phase,"
+                "terminal_at,provider_evidence_json) VALUES(?,?, 'manual_review', ?,?,?,?,'','','','manual_review',?,?,?,?,"
+                "'manual_review','manual_review',?,?) ON CONFLICT(deal_id,stage) DO UPDATE SET status='manual_review',"
+                "outcome='manual_review',phase='manual_review',owner='',started_at='',lease_expires_at='',"
+                "terminal_at=excluded.terminal_at,provider_evidence_json=excluded.provider_evidence_json,"
+                "updated_at=excluded.updated_at",
+                (
+                    deal_id, stage, content_hash, now, now, operation_id, recipient, contact_identity,
+                    source_type, source_key, now, canonical_json(evidence),
+                ),
+            )
+            operation = {
+                "operation_id": operation_id, "source_type": source_type, "source_key": source_key,
+                "deal_id": deal_id, "recipient": recipient,
+            }
+            task_id = self._create_review_task_tx(
+                operation=operation, reason_codes=reasons, rejected_body=body,
+                validation_errors=errors, provider_evidence=evidence, now=now,
+            )
+            disposition_evidence = {
+                "outcome": "manual_review", "review_task_id": task_id,
+                "reason_codes": reasons, "legacy_reconciliation": True,
+            }
+            self.connection.execute(
+                "INSERT INTO unified_source_dispositions(source_type,source_key,deal_id,operation_id,disposition,evidence_json,"
+                "updated_at) VALUES(?,?,?,?, 'manual_action_required', ?,?) ON CONFLICT(source_type,source_key) DO UPDATE SET "
+                "deal_id=excluded.deal_id,operation_id=excluded.operation_id,disposition='manual_action_required',"
+                "evidence_json=excluded.evidence_json,updated_at=excluded.updated_at",
+                (source_type, source_key, deal_id, operation_id, canonical_json(disposition_evidence), now),
+            )
+            self.connection.execute(
+                "INSERT INTO unified_response_events(operation_id,deal_id,previous_phase,new_phase,evidence_json,created_at) "
+                "SELECT ?,?,'legacy','manual_review',?,? WHERE NOT EXISTS (SELECT 1 FROM unified_response_events "
+                "WHERE operation_id=? AND previous_phase='legacy' AND new_phase='manual_review')",
+                (operation_id, deal_id, canonical_json(disposition_evidence), now, operation_id),
+            )
+            self.connection.execute("COMMIT")
+            return {"deal_id": deal_id, "operation_id": operation_id, "task_id": task_id}
+        except Exception:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def finalize_response_attempt(
+        self,
+        operation_id: str,
+        *,
+        outcome: str,
+        external_message_id: str = "",
+        external_draft_id: str = "",
+        provider_evidence: dict[str, Any] | None = None,
+        reason_codes: list[str] | tuple[str, ...] = (),
+        rejected_body: str = "",
+        validation_errors: list[str] | tuple[str, ...] = (),
+        source_disposition: str = "",
+        reconcile_terminal_claim: bool = False,
+    ) -> bool:
+        """Atomically converge operation, outbox, artifact, claim, deal and review.
+
+        ``outcome_unknown`` is impossible before the durable ``post_started``
+        transition. A successful send requires provider-locatable evidence.
+        """
+        outcome = str(outcome or "")
+        if outcome not in {
+            "sent", "draft_created", "validation_failed", "manual_review", "retry_scheduled",
+            "outcome_unknown",
+        }:
+            raise ValueError("invalid_response_outcome")
+        evidence = dict(provider_evidence or {})
+        reasons = list(dict.fromkeys(str(item) for item in reason_codes if str(item)))
+        errors = list(dict.fromkeys(str(item) for item in validation_errors if str(item)))
+        provider_message_id = str(external_message_id or evidence.get("provider_message_id") or "").strip()
+        marker_match = bool(evidence.get("sent_marker_match")) and bool(evidence.get("marker"))
+        if outcome == "sent":
+            if provider_message_id.startswith("zoho-accepted:"):
+                return False
+            if not provider_message_id and not marker_match:
+                return False
+            if not provider_message_id:
+                provider_message_id = "sent-marker:" + digest(canonical_json(evidence))[:24]
+
+        now = utc_now()
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT * FROM unified_outbox WHERE operation_id=?", (str(operation_id),)
+            ).fetchone()
+            if not row:
+                self.connection.execute("ROLLBACK")
+                return False
+            phase = str(row["phase"] or "")
+            status = str(row["status"] or "")
+            terminal_repair_allowed = False
+            if phase in {"sent", "sent_manually", "draft_created", "validation_failed", "manual_review"}:
+                terminal_repair_allowed = (
+                    reconcile_terminal_claim
+                    and str(row["owner"] or "").startswith("reaper:")
+                    and (
+                        (
+                            outcome == "manual_review"
+                            and status in {"permanent_failed", "validation_failed"}
+                        )
+                        or (outcome == "sent" and status == "sent" and phase == "sent")
+                    )
+                )
+                if not terminal_repair_allowed:
+                    self.connection.execute("ROLLBACK")
+                    return phase == outcome
+            if outcome == "outcome_unknown" and phase != "post_started":
+                self.connection.execute("ROLLBACK")
+                return False
+            if outcome == "retry_scheduled" and phase == "post_started" and not evidence.get("provider_rejected"):
+                self.connection.execute("ROLLBACK")
+                return False
+            if outcome == "sent" and phase not in {"post_started", "outcome_unknown"} and not terminal_repair_allowed:
+                self.connection.execute("ROLLBACK")
+                return False
+            if outcome == "draft_created" and not str(external_draft_id or evidence.get("provider_draft_id") or ""):
+                self.connection.execute("ROLLBACK")
+                return False
+
+            durable_status = outcome
+            artifact_status = {
+                "sent": "sent", "draft_created": "created", "validation_failed": "failed",
+                "manual_review": "manual_review", "retry_scheduled": "retry_scheduled",
+                "outcome_unknown": "outcome_unknown",
+            }[outcome]
+            error_text = ",".join(reasons or errors)[:500]
+            self.connection.execute(
+                "UPDATE unified_outbox SET status=?,phase=?,external_message_id=COALESCE(NULLIF(?,''),external_message_id),"
+                "last_error=?,owner='',started_at='',lease_expires_at='',terminal_at=CASE WHEN ? IN "
+                "('sent','draft_created','validation_failed','manual_review') THEN ? ELSE NULL END,"
+                "provider_evidence_json=?,validation_errors_json=?,updated_at=? WHERE operation_id=?",
+                (
+                    durable_status, outcome, provider_message_id, error_text, outcome, now,
+                    canonical_json(evidence), canonical_json(errors), now, str(operation_id),
+                ),
+            )
+            self.connection.execute(
+                "UPDATE unified_artifacts SET status=?,phase=?,outcome=?,external_message_id=COALESCE(NULLIF(?,''),external_message_id),"
+                "external_draft_id=COALESCE(NULLIF(?,''),external_draft_id),owner='',started_at='',lease_expires_at='',"
+                "terminal_at=CASE WHEN ? IN ('sent','draft_created','validation_failed','manual_review') THEN ? ELSE NULL END,"
+                "provider_evidence_json=?,updated_at=? WHERE operation_id=?",
+                (
+                    artifact_status, outcome, outcome, provider_message_id, str(external_draft_id),
+                    outcome, now, canonical_json(evidence), now, str(operation_id),
+                ),
+            )
+
+            deal_status = {
+                "sent": "waiting_for_customer", "draft_created": "draft_ready",
+                "validation_failed": "review_required", "manual_review": "review_required",
+                "retry_scheduled": "analysing", "outcome_unknown": "review_required",
+            }[outcome]
+            self.connection.execute(
+                "UPDATE unified_deals SET status=?,last_response_id=CASE WHEN ?='sent' THEN ? ELSE last_response_id END,"
+                "current_draft_id=CASE WHEN ?='draft_created' THEN ? ELSE current_draft_id END,"
+                "scope_display=CASE WHEN ? IN ('validation_failed','manual_review','outcome_unknown') "
+                "THEN ? ELSE scope_display END,updated_at=? WHERE deal_id=?",
+                (
+                    deal_status, outcome, provider_message_id, outcome, str(external_draft_id),
+                    outcome, error_text, now, str(row["deal_id"]),
+                ),
+            )
+            task_id = ""
+            if outcome in {"validation_failed", "manual_review", "outcome_unknown"}:
+                task_id = self._create_review_task_tx(
+                    operation=row, reason_codes=reasons or [outcome], rejected_body=rejected_body,
+                    validation_errors=errors, provider_evidence=evidence, now=now,
+                )
+            else:
+                self.connection.execute(
+                    "UPDATE unified_review_tasks SET status='closed',updated_at=? "
+                    "WHERE operation_id=? AND status='open'",
+                    (now, str(operation_id)),
+                )
+
+            disposition = source_disposition or {
+                "sent": "customer_succeeded", "draft_created": "draft_verified",
+                "validation_failed": "manual_action_required", "manual_review": "manual_action_required",
+                "retry_scheduled": "retry_scheduled", "outcome_unknown": "outcome_unknown",
+            }[outcome]
+            disposition_evidence = {
+                "outcome": outcome,
+                "provider_message_id": provider_message_id,
+                "external_draft_id": str(external_draft_id),
+                "review_task_id": task_id,
+                "reason_codes": reasons,
+            }
+            self.connection.execute(
+                "INSERT INTO unified_source_dispositions(source_type,source_key,deal_id,operation_id,disposition,evidence_json,updated_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(source_type,source_key) DO UPDATE SET "
+                "deal_id=excluded.deal_id,operation_id=excluded.operation_id,disposition=excluded.disposition,"
+                "evidence_json=excluded.evidence_json,updated_at=excluded.updated_at",
+                (
+                    str(row["source_type"]), str(row["source_key"]), str(row["deal_id"]),
+                    str(operation_id), disposition, canonical_json(disposition_evidence), now,
+                ),
+            )
+            self._record_response_event_tx(
+                operation_id=str(operation_id), deal_id=str(row["deal_id"]), previous_phase=phase,
+                new_phase=outcome, evidence=disposition_evidence, now=now,
+            )
+            self.connection.execute("COMMIT")
+            return True
+        except Exception:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def review_tasks(self, *, status: str = "open") -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM unified_review_tasks WHERE status=? ORDER BY created_at", (str(status),)
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            for key in ("reason_codes_json", "validation_errors_json", "provider_evidence_json"):
+                item[key.removesuffix("_json")] = json.loads(item.pop(key) or ("[]" if key != "provider_evidence_json" else "{}"))
+            result.append(item)
+        return result
+
+    def mark_review_task_notified(self, task_id: str, *, channel: str, provider_evidence: dict[str, Any]) -> bool:
         now = utc_now()
         cursor = self.connection.execute(
-            "UPDATE unified_outbox SET status='sent',external_message_id=?,last_error='',updated_at=? "
-            "WHERE operation_id=? AND status='in_progress'",
-            (str(external_message_id), now, str(operation_id)),
+            "UPDATE unified_review_tasks SET notification_status='sent',provider_evidence_json=?,updated_at=? "
+            "WHERE task_id=? AND status='open'",
+            (canonical_json({"channel": str(channel), **dict(provider_evidence or {})}), now, str(task_id)),
         )
-        if cursor.rowcount:
-            self.connection.execute(
-                "UPDATE unified_artifacts SET status='sent',external_message_id=?,outcome='sent',updated_at=? "
-                "WHERE operation_id=?",
-                (str(external_message_id), now, str(operation_id)),
-            )
         return cursor.rowcount == 1
+
+    def source_disposition(self, source_type: str, source_key: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM unified_source_dispositions WHERE source_type=? AND source_key=?",
+            (str(source_type), str(source_key)),
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["evidence"] = json.loads(result.pop("evidence_json") or "{}")
+        return result
+
+    def artifact(self, deal_id: str, stage: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM unified_artifacts WHERE deal_id=? AND stage=?", (str(deal_id), str(stage))
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["provider_evidence"] = json.loads(result.pop("provider_evidence_json", "{}") or "{}")
+        return result
+
+    def record_validation_attempt(
+        self,
+        operation_id: str,
+        *,
+        deal_id: str,
+        attempt_number: int,
+        prompt_version: str,
+        contract_digest: str,
+        body: str,
+        error_codes: list[str],
+        offending_spans: list[dict[str, Any]],
+        sanitizer_actions: list[str],
+    ) -> None:
+        self.connection.execute(
+            "INSERT INTO unified_validation_attempts(operation_id,deal_id,attempt_number,prompt_version,contract_digest,"
+            "content_hash,error_codes_json,offending_spans_json,sanitizer_actions_json,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(operation_id,attempt_number) DO UPDATE SET "
+            "prompt_version=excluded.prompt_version,contract_digest=excluded.contract_digest,content_hash=excluded.content_hash,"
+            "error_codes_json=excluded.error_codes_json,offending_spans_json=excluded.offending_spans_json,"
+            "sanitizer_actions_json=excluded.sanitizer_actions_json,created_at=excluded.created_at",
+            (
+                str(operation_id), str(deal_id), int(attempt_number), str(prompt_version), str(contract_digest),
+                digest(body), canonical_json(error_codes), canonical_json(offending_spans),
+                canonical_json(sanitizer_actions), utc_now(),
+            ),
+        )
+
+    def complete_outbox(self, operation_id: str, *, external_message_id: str) -> bool:
+        return self.finalize_response_attempt(
+            str(operation_id), outcome="sent", external_message_id=str(external_message_id),
+            provider_evidence={"provider_message_id": str(external_message_id)},
+        )
 
     def reconcile_outbox_sent(self, operation_id: str, *, external_message_id: str) -> bool:
-        now = utc_now()
-        cursor = self.connection.execute(
-            "UPDATE unified_outbox SET status='sent',external_message_id=?,last_error='',updated_at=? "
-            "WHERE operation_id=? AND status IN ('in_progress','outcome_unknown')",
-            (str(external_message_id), now, str(operation_id)),
+        return self.finalize_response_attempt(
+            str(operation_id), outcome="sent", external_message_id=str(external_message_id),
+            provider_evidence={"provider_message_id": str(external_message_id), "reconciled": True},
         )
-        if cursor.rowcount:
-            self.connection.execute(
-                "UPDATE unified_artifacts SET status='sent',external_message_id=?,outcome='sent',updated_at=? "
-                "WHERE operation_id=?",
-                (str(external_message_id), now, str(operation_id)),
-            )
-        return cursor.rowcount == 1
 
     def mark_outbox_outcome_unknown(self, operation_id: str, *, error: str) -> bool:
-        now = utc_now()
-        cursor = self.connection.execute(
-            "UPDATE unified_outbox SET status='outcome_unknown',last_error=?,updated_at=? "
-            "WHERE operation_id=? AND status='in_progress'",
-            (str(error)[:500], now, str(operation_id)),
+        return self.finalize_response_attempt(
+            str(operation_id), outcome="outcome_unknown", reason_codes=[str(error)[:500]],
         )
-        if cursor.rowcount:
-            self.connection.execute(
-                "UPDATE unified_artifacts SET outcome='outcome_unknown',updated_at=? WHERE operation_id=?",
-                (now, str(operation_id)),
-            )
-        return cursor.rowcount == 1
 
     def fail_outbox(self, operation_id: str, *, error: str, retryable: bool = False) -> bool:
-        now = utc_now()
-        status = "retryable_failed" if retryable else "permanent_failed"
-        cursor = self.connection.execute(
-            "UPDATE unified_outbox SET status=?,last_error=?,updated_at=? "
-            "WHERE operation_id=? AND status IN ('claimed','in_progress')",
-            (status, str(error)[:500], now, str(operation_id)),
+        return self.finalize_response_attempt(
+            str(operation_id), outcome="retry_scheduled" if retryable else "validation_failed",
+            reason_codes=[str(error)[:500]], validation_errors=[str(error)[:500]],
         )
-        if cursor.rowcount:
-            self.connection.execute(
-                "UPDATE unified_artifacts SET outcome=?,updated_at=? WHERE operation_id=?",
-                (status, now, str(operation_id)),
-            )
-        return cursor.rowcount == 1
 
     def unresolved_outcome_unknown(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             "SELECT * FROM unified_outbox WHERE status='outcome_unknown' ORDER BY created_at"
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def detect_expired_claims(self, *, now: str | None = None) -> list[dict[str, Any]]:
+        cutoff = parse_time(now or utc_now()) or datetime.now(timezone.utc)
+        rows = self.connection.execute(
+            "SELECT * FROM unified_outbox WHERE owner!='' AND lease_expires_at!='' "
+            "AND status IN ('claimed','in_progress','permanent_failed','sent') ORDER BY lease_expires_at"
+        ).fetchall()
+        return [dict(row) for row in rows if (parse_time(str(row["lease_expires_at"] or "")) or cutoff) <= cutoff]
+
+    def reap_expired_claims(self, *, now: str | None = None) -> list[dict[str, Any]]:
+        """CAS expired leases into retry/reconciliation; this worker never sends."""
+        results: list[dict[str, Any]] = []
+        for candidate in self.detect_expired_claims(now=now):
+            operation_id = str(candidate["operation_id"])
+            owner = str(candidate.get("owner") or "")
+            lease = str(candidate.get("lease_expires_at") or "")
+            reaper_owner = f"reaper:{default_claim_owner()}"
+            cursor = self.connection.execute(
+                "UPDATE unified_outbox SET owner=? WHERE operation_id=? AND owner=? AND lease_expires_at=?",
+                (reaper_owner, operation_id, owner, lease),
+            )
+            if cursor.rowcount != 1:
+                continue
+            phase = str(candidate.get("phase") or "")
+            status = str(candidate.get("status") or "")
+            if status == "sent" or phase == "sent":
+                try:
+                    evidence = json.loads(str(candidate.get("provider_evidence_json") or "{}"))
+                except json.JSONDecodeError:
+                    evidence = {}
+                evidence.update({"reaper": True, "previous_status": status})
+                finalized = self.finalize_response_attempt(
+                    operation_id,
+                    outcome="sent",
+                    external_message_id=str(candidate.get("external_message_id") or ""),
+                    provider_evidence=evidence,
+                    reconcile_terminal_claim=True,
+                )
+                if not finalized:
+                    self.connection.execute(
+                        "UPDATE unified_outbox SET owner=? WHERE operation_id=? AND owner=? AND lease_expires_at=?",
+                        (owner, operation_id, reaper_owner, lease),
+                    )
+                    continue
+                outcome = "sent"
+            elif status == "permanent_failed" or phase == "validation_failed":
+                finalized = self.finalize_response_attempt(
+                    operation_id,
+                    outcome="manual_review",
+                    reason_codes=["expired_terminal_failure_claim"],
+                    validation_errors=[str(candidate.get("last_error") or "terminal_failure")],
+                    provider_evidence={"reaper": True, "previous_status": str(candidate.get("status") or "")},
+                    reconcile_terminal_claim=True,
+                )
+                if not finalized:
+                    continue
+                outcome = "manual_review"
+            elif phase == "post_started" or str(candidate.get("status") or "") == "in_progress":
+                self.finalize_response_attempt(
+                    operation_id, outcome="outcome_unknown", reason_codes=["expired_post_started_lease"],
+                )
+                outcome = "outcome_unknown"
+            else:
+                self.finalize_response_attempt(
+                    operation_id, outcome="retry_scheduled", reason_codes=["expired_pre_post_lease"],
+                )
+                outcome = "retry_scheduled"
+            results.append({"operation_id": operation_id, "previous_phase": phase, "outcome": outcome})
+        return results
+
+    def record_manual_final_offer_sent(
+        self,
+        deal_id: str,
+        *,
+        external_message_id: str,
+        sent_at: str,
+        marker: str,
+        pdf_hash: str,
+        recipient: str,
+        thread_id: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> bool:
+        deal_id = str(deal_id or "")
+        recipient = normalize_email(recipient)
+        thread_id = str(thread_id or "").strip()
+        if not all((deal_id, external_message_id, sent_at, marker, pdf_hash, recipient, thread_id)):
+            return False
+        now = utc_now()
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            artifact = self.connection.execute(
+                "SELECT * FROM unified_artifacts WHERE deal_id=? AND stage='final_offer'",
+                (deal_id,),
+            ).fetchone()
+            if not artifact or str(artifact["status"] or "") not in {"created", "draft_created", "sent_manually"}:
+                self.connection.execute("ROLLBACK")
+                return False
+            operation_id = str(artifact["operation_id"] or "")
+            operation = None
+            if operation_id:
+                operation = self.connection.execute(
+                    "SELECT * FROM unified_outbox WHERE operation_id=?", (operation_id,)
+                ).fetchone()
+                if (
+                    not operation
+                    or str(operation["deal_id"] or "") != deal_id
+                    or str(operation["stage"] or "") != "final_offer"
+                    or str(operation["message_type"] or "") != "final_offer"
+                    or str(operation["status"] or "") not in {"draft_created", "sent_manually"}
+                ):
+                    self.connection.execute("ROLLBACK")
+                    return False
+            existing = self.connection.execute(
+                "SELECT external_message_id,sent_at,marker,pdf_hash,recipient,thread_id "
+                "FROM unified_manual_sends WHERE deal_id=? AND stage='final_offer'",
+                (deal_id,),
+            ).fetchone()
+            if existing:
+                expected = (
+                    str(external_message_id), str(sent_at), str(marker), str(pdf_hash), recipient, thread_id,
+                )
+                durable = tuple(str(existing[key] or "") for key in (
+                    "external_message_id", "sent_at", "marker", "pdf_hash", "recipient", "thread_id"
+                ))
+                if durable != expected:
+                    self.connection.execute("ROLLBACK")
+                    return False
+
+            previous_phase = str(operation["phase"] or "") if operation else str(artifact["phase"] or "")
+            artifact_evidence = json.loads(str(artifact["provider_evidence_json"] or "{}"))
+            manual_evidence = {
+                **artifact_evidence,
+                **dict(evidence or {}),
+                "provider_message_id": str(external_message_id),
+                "sent_marker_match": True,
+                "manual_send": True,
+                "marker": str(marker),
+                "pdf_hash": str(pdf_hash),
+                "recipient": recipient,
+                "thread_id": thread_id,
+                "sent_at": str(sent_at),
+            }
+            if not existing:
+                self.connection.execute(
+                    "INSERT INTO unified_manual_sends(deal_id,stage,external_message_id,sent_at,marker,pdf_hash,recipient,"
+                    "thread_id,evidence_json,created_at) VALUES(?,'final_offer',?,?,?,?,?,?,?,?)",
+                    (
+                        deal_id, str(external_message_id), str(sent_at), str(marker), str(pdf_hash), recipient,
+                        thread_id, canonical_json(manual_evidence), now,
+                    ),
+                )
+            else:
+                self.connection.execute(
+                    "UPDATE unified_manual_sends SET evidence_json=? WHERE deal_id=? AND stage='final_offer'",
+                    (canonical_json(manual_evidence), deal_id),
+                )
+            if operation:
+                self.connection.execute(
+                    "UPDATE unified_outbox SET status='sent_manually',phase='sent_manually',external_message_id=?,"
+                    "owner='',started_at='',lease_expires_at='',terminal_at=?,provider_evidence_json=?,updated_at=? "
+                    "WHERE operation_id=?",
+                    (
+                        str(external_message_id), now, canonical_json(manual_evidence), now, operation_id,
+                    ),
+                )
+            self.connection.execute(
+                "UPDATE unified_artifacts SET status='sent_manually',phase='sent_manually',outcome='sent_manually',"
+                "external_message_id=?,terminal_at=?,provider_evidence_json=?,updated_at=? "
+                "WHERE deal_id=? AND stage='final_offer'",
+                (str(external_message_id), now, canonical_json(manual_evidence), now, deal_id),
+            )
+            self.connection.execute(
+                "UPDATE unified_deals SET status='completed',last_response_id=?,updated_at=? WHERE deal_id=?",
+                (str(external_message_id), now, deal_id),
+            )
+            if operation:
+                disposition_evidence = {
+                    "outcome": "sent_manually",
+                    "provider_message_id": str(external_message_id),
+                    "external_draft_id": str(artifact["external_draft_id"] or ""),
+                    "marker": str(marker),
+                    "pdf_hash": str(pdf_hash),
+                }
+                self.connection.execute(
+                    "INSERT INTO unified_source_dispositions(source_type,source_key,deal_id,operation_id,disposition,"
+                    "evidence_json,updated_at) VALUES(?,?,?,?, 'draft_verified', ?,?) "
+                    "ON CONFLICT(source_type,source_key) DO UPDATE SET deal_id=excluded.deal_id,"
+                    "operation_id=excluded.operation_id,disposition='draft_verified',"
+                    "evidence_json=excluded.evidence_json,updated_at=excluded.updated_at",
+                    (
+                        str(operation["source_type"]), str(operation["source_key"]), deal_id, operation_id,
+                        canonical_json(disposition_evidence), now,
+                    ),
+                )
+                self.connection.execute(
+                    "UPDATE unified_review_tasks SET status='closed',updated_at=? "
+                    "WHERE operation_id=? AND status='open'",
+                    (now, operation_id),
+                )
+                if previous_phase != "sent_manually":
+                    self._record_response_event_tx(
+                        operation_id=operation_id,
+                        deal_id=deal_id,
+                        previous_phase=previous_phase,
+                        new_phase="sent_manually",
+                        evidence=disposition_evidence,
+                        now=now,
+                    )
+            self.connection.execute("COMMIT")
+            return True
+        except Exception:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def invariant_violations(self, *, now: str | None = None) -> list[dict[str, Any]]:
+        cutoff = str(now or utc_now())
+        checks = {
+            "stale_claimed": (
+                "SELECT operation_id FROM unified_outbox WHERE status='claimed' AND lease_expires_at!='' AND lease_expires_at<?",
+                (cutoff,),
+            ),
+            "orphan_artifact_creating": (
+                "SELECT a.operation_id FROM unified_artifacts a LEFT JOIN unified_outbox o ON o.operation_id=a.operation_id "
+                "WHERE a.status='creating' AND (o.operation_id IS NULL OR o.status IN "
+                "('sent','sent_manually','draft_created','validation_failed','manual_review','permanent_failed'))",
+                (),
+            ),
+            "permanent_failed_active_claim": (
+                "SELECT operation_id FROM unified_outbox WHERE status='permanent_failed' AND owner!=''",
+                (),
+            ),
+            "review_required_without_task": (
+                "SELECT d.deal_id AS operation_id FROM unified_deals d LEFT JOIN unified_review_tasks r "
+                "ON r.deal_id=d.deal_id AND r.status='open' WHERE d.status='review_required' AND r.task_id IS NULL",
+                (),
+            ),
+            "duplicate_open_review_tasks": (
+                "SELECT deal_id AS operation_id FROM unified_review_tasks WHERE status='open' "
+                "GROUP BY deal_id HAVING COUNT(*)>1",
+                (),
+            ),
+            "outcome_unknown": (
+                "SELECT operation_id FROM unified_outbox WHERE status='outcome_unknown'",
+                (),
+            ),
+            "projection_drift": (
+                "SELECT o.operation_id FROM unified_outbox o JOIN unified_artifacts a ON a.operation_id=o.operation_id "
+                "WHERE o.phase!=a.phase",
+                (),
+            ),
+            "expired_lease": (
+                "SELECT operation_id FROM unified_outbox WHERE owner!='' AND lease_expires_at!='' AND lease_expires_at<?",
+                (cutoff,),
+            ),
+        }
+        violations: list[dict[str, Any]] = []
+        for code, (query, params) in checks.items():
+            rows = self.connection.execute(query, params).fetchall()
+            for row in rows:
+                violations.append({"code": code, "operation_id": str(row["operation_id"] or "")})
+        security = self.connection.execute(
+            "SELECT security_event_id,event_type FROM unified_security_events WHERE event_type IN "
+            "('zoho_account_folder_mismatch','recipient_resolution_failed') AND resolved_at IS NULL"
+        ).fetchall()
+        violations.extend(
+            {"code": "account_folder_mismatch", "operation_id": str(row["security_event_id"]), "event_type": row["event_type"]}
+            for row in security
+        )
+        return violations
 
     def record_response(
         self,
@@ -2212,12 +3140,33 @@ class UnifiedLeadRegistry:
             (str(error or "draft_failed")[:500], now, deal_id),
         )
 
-    def record_offer(self, deal_id: str, *, draft_id: str, price_net_display: str, scope: str) -> None:
+    def record_offer(
+        self,
+        deal_id: str,
+        *,
+        draft_id: str,
+        price_net_display: str,
+        scope: str,
+        pdf_hash: str = "",
+        marker: str = "",
+        recipient: str = "",
+        thread_id: str = "",
+    ) -> None:
         now = utc_now()
+        provider_evidence = {
+            "provider_draft_id": str(draft_id), "pdf_hash": str(pdf_hash), "marker": str(marker),
+            "recipient": normalize_email(recipient), "thread_id": str(thread_id),
+        }
         self.connection.execute(
-            "INSERT INTO unified_artifacts(deal_id,stage,status,content_hash,external_draft_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?) "
-            "ON CONFLICT(deal_id,stage) DO UPDATE SET status='created',external_draft_id=excluded.external_draft_id,updated_at=excluded.updated_at",
-            (deal_id, "final_offer", "created", digest(f"{price_net_display}|{scope}"), draft_id, now, now),
+            "INSERT INTO unified_artifacts(deal_id,stage,status,content_hash,external_draft_id,created_at,updated_at,"
+            "phase,provider_evidence_json) VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(deal_id,stage) DO UPDATE SET status='created',phase='draft_created',"
+            "external_draft_id=excluded.external_draft_id,provider_evidence_json=excluded.provider_evidence_json,"
+            "updated_at=excluded.updated_at",
+            (
+                deal_id, "final_offer", "created", digest(f"{price_net_display}|{scope}"), draft_id, now, now,
+                "draft_created", canonical_json(provider_evidence),
+            ),
         )
         self.connection.execute(
             "UPDATE unified_deals SET status='offer_ready',final_draft_id=?,current_draft_id=?,price_net_display=?,scope_display=?,updated_at=? WHERE deal_id=?",
@@ -2225,9 +3174,45 @@ class UnifiedLeadRegistry:
         )
 
     def mark_review(self, deal_id: str, reason: str) -> None:
+        """Create the durable task first; notifications are only projections."""
+        deal_id = str(deal_id or "")
+        if not deal_id:
+            return
+        reason = str(reason or "requires_review")[:500]
+        now = utc_now()
+        event = self.connection.execute(
+            "SELECT source_type,source_key,email FROM unified_events WHERE deal_id=? ORDER BY event_id DESC LIMIT 1",
+            (deal_id,),
+        ).fetchone()
+        source_type = str(event["source_type"] if event else "internal")
+        source_key = str(event["source_key"] if event else f"deal:{deal_id}")
+        recipient = normalize_email(str(event["email"] if event else ""))
+        operation_id = f"review:{deal_id}:{digest(reason)[:16]}"
+        task_id = "review-" + digest(operation_id)[:28]
+        sla_at = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(timespec="seconds")
         self.connection.execute(
             "UPDATE unified_deals SET status='review_required',scope_display=?,updated_at=? WHERE deal_id=?",
-            (str(reason or "requires_review")[:500], utc_now(), deal_id),
+            (reason, now, deal_id),
+        )
+        self.connection.execute(
+            "INSERT INTO unified_review_tasks(task_id,source_type,source_key,deal_id,operation_id,reason_codes_json,"
+            "rejected_body,validation_errors_json,recipient,provider_evidence_json,created_at,sla_at,"
+            "notification_status,status,updated_at) VALUES(?,?,?,?,?,?,'','[]',?,'{}',?,?,?,'open',?) "
+            "ON CONFLICT(operation_id) DO UPDATE SET reason_codes_json=excluded.reason_codes_json,"
+            "recipient=excluded.recipient,status='open',updated_at=excluded.updated_at",
+            (
+                task_id, source_type, source_key, deal_id, operation_id, canonical_json([reason]),
+                recipient, now, sla_at, "pending", now,
+            ),
+        )
+        self.connection.execute(
+            "INSERT INTO unified_source_dispositions(source_type,source_key,deal_id,operation_id,disposition,evidence_json,updated_at) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(source_type,source_key) DO UPDATE SET disposition='manual_action_required',"
+            "operation_id=excluded.operation_id,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at",
+            (
+                source_type, source_key, deal_id, operation_id, "manual_action_required",
+                canonical_json({"review_task_id": task_id, "reason_codes": [reason]}), now,
+            ),
         )
 
     def set_status(self, deal_id: str, status: str) -> bool:
@@ -2321,6 +3306,7 @@ class UnifiedLeadRegistry:
         unchanged: list[str] = []
         now = utc_now()
         occurred = str(occurred_at or now)
+        from offer_readiness import normalize_fact
         for field, new_value in (provided_info or {}).items():
             if new_value is None or new_value == "":
                 continue
@@ -2333,6 +3319,19 @@ class UnifiedLeadRegistry:
             elif previous == new_value:
                 unchanged.append(field)
                 action = "unchanged"
+            elif (
+                normalize_fact(previous).get("state") in {"unknown_confirmed", "not_asked", "assumed"}
+                and normalize_fact(new_value).get("state") == "known"
+            ):
+                existing[field] = new_value
+                updated.append(field)
+                action = "updated"
+            elif (
+                normalize_fact(previous).get("state") == "known"
+                and normalize_fact(new_value).get("state") in {"unknown_confirmed", "not_asked"}
+            ):
+                unchanged.append(field)
+                action = "known_value_kept"
             else:
                 # Controlled update: do NOT silently overwrite. Keep the
                 # previous value, record the conflict for human review.

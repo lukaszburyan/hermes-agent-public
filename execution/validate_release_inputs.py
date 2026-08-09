@@ -59,6 +59,10 @@ def validate() -> dict[str, Any]:
     image = str(compose.get("services", {}).get("hermes-agent", {}).get("image", ""))
     if ":latest" in image or "@${HERMES_RELEASE_DIGEST" not in image:
         errors.append("canonical Compose image must require HERMES_RELEASE_DIGEST and must not use latest")
+    environment = compose.get("services", {}).get("hermes-agent", {}).get("environment", {})
+    for name in ("HERMES_RELEASE_COMMIT", "HERMES_RELEASE_TAG"):
+        if not str(environment.get(name, "")).startswith(f"${{{name}:?"):
+            errors.append(f"canonical Compose must require and override {name}")
     checked["compose"] += 1
 
     shim = yaml.safe_load(COMPOSE_SHIM.read_text(encoding="utf-8"))

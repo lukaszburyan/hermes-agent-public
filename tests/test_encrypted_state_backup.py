@@ -21,6 +21,7 @@ from hermes_state_backup import (
     apply_offsite_retention,
     acknowledge_restore,
     create_backup,
+    evaluate_offsite_retention,
     restore_backup,
     upload_offsite,
     verify_backup,
@@ -87,6 +88,8 @@ def build_state(root: Path) -> tuple[str, str]:
         thread_id="thread-backup-1",
         marker="marker-backup-1",
     )
+    assert registry.mark_content_validated("operation-backup-1")
+    assert registry.mark_transport_starting("operation-backup-1")
     assert registry.mark_outbox_in_progress("operation-backup-1")
     assert registry.complete_outbox("operation-backup-1", external_message_id="sent-backup-1")
     registry.close()
@@ -186,6 +189,7 @@ def test_encrypted_backup_restore_preserves_terminal_outbox_and_requires_reconci
             "zoho_drafts_reconciled": True,
             "google_sheets_reconciled": True,
             "recipient_bindings_reconciled": True,
+            "lifecycle_inventory_reconciled": True,
             "note": "controlled restore fixture compared to source manifest",
         },
     )
@@ -260,9 +264,40 @@ def test_offsite_upload_verifies_remote_sha256(monkeypatch: pytest.MonkeyPatch, 
     evidence = upload_offsite(backup=backup, remote_directory="controlled:hermes/backups")
 
     assert evidence["offsite_verified"] is True
+    assert evidence["offsite_verification_method"] == "provider_hashsum"
     assert evidence["offsite_remote"] == "controlled:hermes/backups/state.age"
     assert any(command[:2] == ["rclone", "hashsum"] for command in calls)
     assert len([command for command in calls if command[:2] == ["rclone", "copyto"]]) == 3
+
+
+def test_offsite_upload_streams_remote_when_provider_hash_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    backup = tmp_path / "state.age"
+    encrypted = b"encrypted-controlled-state"
+    backup.write_bytes(encrypted)
+    digest = backup_module.sha256_file(backup)
+    backup.with_name(backup.name + ".sha256").write_text(f"{digest}  {backup.name}\n", encoding="ascii")
+    backup.with_name(backup.name + ".metadata.json").write_text(
+        '{"offsite_verified":false}\n', encoding="utf-8"
+    )
+
+    def fake_run_checked(command: list[str], *, input_text: str | None = None):
+        if command[1:3] == ["hashsum", "SHA-256"]:
+            raise BackupError("hash type not supported")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def fake_subprocess_run(command: list[str], **kwargs):
+        assert command[:2] == ["rclone", "cat"]
+        return subprocess.CompletedProcess(command, 0, stdout=encrypted, stderr=b"")
+
+    monkeypatch.setattr(backup_module, "run_checked", fake_run_checked)
+    monkeypatch.setattr(backup_module.subprocess, "run", fake_subprocess_run)
+    evidence = upload_offsite(backup=backup, remote_directory="controlled:hermes/backups")
+
+    assert evidence["offsite_verified"] is True
+    assert evidence["offsite_download_sha256"] == digest
+    assert evidence["offsite_verification_method"] == "download_and_local_sha256"
 
 
 def test_offsite_retention_is_approval_gated_and_scoped(monkeypatch: pytest.MonkeyPatch):
@@ -302,8 +337,48 @@ def test_offsite_retention_is_approval_gated_and_scoped(monkeypatch: pytest.Monk
         "--min-age",
         "30d",
     ]
-    assert command[-2:] == ["--exclude", "*"]
-    assert all("hermes-state-*" in command[index + 1] for index, value in enumerate(command) if value == "--include")
+    assert command[-2:] == ["--filter", "- *"]
+    assert all("hermes-state-*" in command[index + 1] for index, value in enumerate(command) if value == "--filter" and command[index + 1].startswith("+ "))
+
+
+def test_offsite_retention_inventory_is_read_only_and_records_empty_result(monkeypatch: pytest.MonkeyPatch):
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, input_text: str | None = None):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command, 0, stdout='[{"Path":"unrelated-old-file"}]', stderr="",
+        )
+
+    monkeypatch.setattr(backup_module, "run_checked", fake_run)
+    result = evaluate_offsite_retention(
+        remote_directory="controlled:hermes/rfq-state", retention_days=30,
+    )
+
+    assert result["offsite_expired_objects"] == 0
+    assert result["offsite_expired_object_names"] == []
+    assert result["offsite_retention_action"] == "evaluated_no_expired_objects"
+    assert result["offsite_retention_applied_at"] == result["offsite_retention_evaluated_at"]
+    assert calls[0][:3] == ["rclone", "lsjson", "controlled:hermes/rfq-state"]
+    assert "delete" not in calls[0]
+
+
+def test_offsite_retention_inventory_reports_expired_names_without_deletion(monkeypatch: pytest.MonkeyPatch):
+    def fake_run(command: list[str], *, input_text: str | None = None):
+        return subprocess.CompletedProcess(
+            command, 0,
+            stdout='[{"Path":"hermes-state-old.tar.gz.age"}]', stderr="",
+        )
+
+    monkeypatch.setattr(backup_module, "run_checked", fake_run)
+    result = evaluate_offsite_retention(
+        remote_directory="controlled:hermes/rfq-state", retention_days=30,
+    )
+
+    assert result["offsite_expired_objects"] == 1
+    assert result["offsite_expired_object_names"] == ["hermes-state-old.tar.gz.age"]
+    assert result["offsite_retention_action"] == "expired_objects_pending_approval"
+    assert "offsite_retention_applied_at" not in result
 
 
 def test_scheduled_backup_is_not_blocked_when_retention_deletion_is_unapproved():
@@ -312,7 +387,8 @@ def test_scheduled_backup_is_not_blocked_when_retention_deletion_is_unapproved()
     assert approval_check in wrapper
     assert 'if [[ "$RETENTION_APPROVED" != "1" ]]' not in wrapper
     assert "creating verified off-site backup without deletion" in wrapper
-    assert 'BACKUP_ARGS+=(--retention-days "$RETENTION_DAYS" --retention-delete-approved)' in wrapper
+    assert '--retention-days "$RETENTION_DAYS"' in wrapper
+    assert 'BACKUP_ARGS+=(--retention-delete-approved)' in wrapper
 
 
 def test_restore_acknowledgement_requires_every_check(tmp_path: Path):
@@ -321,3 +397,30 @@ def test_restore_acknowledgement_requires_every_check(tmp_path: Path):
     flag.write_text('{"status":"reconciliation_required"}\n', encoding="utf-8")
     with pytest.raises(BackupError, match="reconciliation_checks_missing"):
         acknowledge_restore(target=tmp_path, actor="reviewer", evidence={})
+
+
+def test_restore_acknowledgement_refuses_active_lifecycle_state(tmp_path: Path):
+    flag = tmp_path / RECONCILIATION_FLAG
+    flag.parent.mkdir(parents=True)
+    flag.write_text('{"status":"reconciliation_required"}\n', encoding="utf-8")
+    sheets = tmp_path / ".tmp" / "google-sheets-leads-state.json"
+    sheets.parent.mkdir(parents=True)
+    sheets.write_text('{"processed":{}}\n', encoding="utf-8")
+    registry = UnifiedLeadRegistry(tmp_path / ".tmp" / "orchesta-rfq-unified.sqlite3")
+    event = registry.register_event(
+        source_type="mail", source_key="restore-active", email="restore@example.com",
+        company="Controlled", contact_name="Alex", content="Hello", relation="reply",
+    )
+    registry.persist_message_policy(
+        "mail", "restore-active", requested_type="follow_up", effective_type="follow_up",
+        transport_mode="auto_send", reasons=["test"],
+    )
+    assert registry.claim_response(
+        event["deal_id"], "response:restore-active", content_hash="v1", operation_id="restore-active-op",
+        owner="restore-test", message_type="follow_up", recipient="restore@example.com",
+        source_type="mail", source_key="restore-active", marker="restore-active-op",
+    )
+    registry.close()
+    evidence = {name: True for name in backup_module.RECONCILIATION_CHECKS}
+    with pytest.raises(BackupError, match="reconciliation_lifecycle_blockers"):
+        acknowledge_restore(target=tmp_path, actor="reviewer", evidence=evidence)

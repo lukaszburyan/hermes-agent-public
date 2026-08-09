@@ -157,18 +157,27 @@ def extract_facts_from_customer_text(
         mailbox = known.get("mailbox_count") or {}
         if mailbox.get("state") == "known" and mailbox.get("value") is not None:
             facts["mailbox_count"] = mailbox.get("value")
+        elif mailbox.get("state") in {"unknown_confirmed", "conflicting"}:
+            facts["mailbox_count"] = {"state": mailbox.get("state")}
         inquiry = known.get("inquiry_source") or {}
         if inquiry.get("state") == "known" and inquiry.get("value"):
             facts["inquiry_channels"] = inquiry.get("value")
         crm = known.get("crm") or {}
         if crm.get("state") == "known" and crm.get("value") is not None:
             facts["crm"] = crm.get("value")
+        elif crm.get("state") in {"unknown_confirmed", "conflicting"}:
+            facts["crm"] = {"state": crm.get("state")}
+        monthly = known.get("monthly_volume") or {}
+        if monthly.get("state") == "known" and monthly.get("value") is not None:
+            facts["monthly_volume"] = monthly.get("value")
+        elif monthly.get("state") in {"unknown_confirmed", "conflicting"}:
+            facts["monthly_volume"] = {"state": monthly.get("state")}
 
     volume = re.search(
         r"\b(\d{1,5})\s*(?:zapyta\w*|wiadom\w*|mail(?:i|e|y)?|rfq|dokument\w*)\b",
         normalized,
     )
-    if volume:
+    if volume and "monthly_volume" not in facts:
         facts["monthly_volume"] = volume.group(1)
 
     people = re.search(r"\b(\d{1,3})\s*(?:osob\w*|handlow\w*|pracownik\w*)\b", normalized)

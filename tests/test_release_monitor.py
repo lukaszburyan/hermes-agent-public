@@ -11,6 +11,7 @@ if str(EXECUTION) not in sys.path:
     sys.path.insert(0, str(EXECUTION))
 
 from hermes_release_monitor import collect_snapshot
+from behavior_manifest import build_manifest
 from unified_lead_registry import UnifiedLeadRegistry
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
@@ -27,6 +28,13 @@ def build_release_root(root: Path) -> None:
     skill = root / "skills" / "mail-lead-pipeline" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("# Controlled Orchesta RFQ skill\n", encoding="utf-8")
+    manifest = build_manifest(
+        root,
+        commit="8935b97",
+        tag="v0.1.0-test",
+        image_digest="sha256:" + "1" * 64,
+    )
+    (root / "BEHAVIOR_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def build_registry(path: Path, *, outcome_unknown: bool = False, resolved_security: bool = False) -> None:
@@ -64,6 +72,8 @@ def build_registry(path: Path, *, outcome_unknown: bool = False, resolved_securi
         thread_id="thread-monitor-1",
         marker="monitor-marker-1",
     )
+    assert registry.mark_content_validated(operation_id)
+    assert registry.mark_transport_starting(operation_id)
     assert registry.mark_outbox_in_progress(operation_id)
     if outcome_unknown:
         assert registry.mark_outbox_outcome_unknown(operation_id, error="simulated_timeout_after_accept")
@@ -121,6 +131,12 @@ def common_files(root: Path, *, recent: bool = True, canonical: bool = True) -> 
                 "active_process_count": 0,
                 "entrypoint": "/opt/data/scripts/google-sheets-lead-poller.sh",
                 "lock": "/opt/data/.tmp/google-sheets-lead-poller.lock",
+            },
+            "claim_reaper": {
+                "active_count": 1,
+                "active_process_count": 0,
+                "entrypoint": "/opt/data/scripts/hermes-rfq-claim-reaper.sh",
+                "lock": "/opt/data/.tmp/hermes-rfq-claim-reaper.lock",
             },
             "release_container": {
                 "active_count": 1,
@@ -186,7 +202,7 @@ def test_release_monitor_alarms_when_backup_retention_is_not_verified(monkeypatc
         now=NOW,
     )
 
-    assert report["status"] == "alarm"
+    assert report["status"] == "critical"
     assert "backup_retention_unverified" in report["alarms"]
 
 
@@ -212,7 +228,7 @@ def test_release_monitor_alarms_on_skill_target_and_contact_identity_violation(m
         now=NOW,
     )
 
-    assert report["status"] == "alarm"
+    assert report["status"] == "critical"
     assert "active_skill_target_mismatch" in report["alarms"]
     assert "contact_identity_mismatch" in report["alarms"]
 
@@ -243,7 +259,7 @@ def test_release_monitor_alarms_on_strict_production_blockers(monkeypatch, tmp_p
         now=NOW,
     )
 
-    assert report["status"] == "alarm"
+    assert report["status"] == "critical"
     assert {
         "mailbox_heartbeat_stale",
         "google_sheets_heartbeat_stale",

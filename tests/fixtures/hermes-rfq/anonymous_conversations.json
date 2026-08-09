@@ -1,0 +1,68 @@
+[
+  {
+    "id": "anon-pl-short-yes",
+    "from": "buyer1@example.invalid",
+    "subject": "RFQ",
+    "body": "Tak.",
+    "tags": ["yes", "short_reply", "pl"]
+  },
+  {
+    "id": "anon-facts-across-mails",
+    "from": "buyer2@example.invalid",
+    "subject": "Automatyzacja zapytań",
+    "messages": ["Mamy 4 skrzynki.", "Korzystamy z CRM.", "Zapytania trafiają mailem i przez formularz."],
+    "tags": ["multi_message_facts", "pl"]
+  },
+  {
+    "id": "anon-change-and-signature",
+    "from": "buyer3@example.invalid",
+    "subject": "Re: RFQ",
+    "body": "Korekta: mamy 7, nie 5 skrzynek.\n\nPozdrawiam,\nAlex Test\nTelefon: +48 500 000 000\nKapitał 5000 PLN",
+    "tags": ["fact_change", "signature", "phone", "signature_amount", "pl"]
+  },
+  {
+    "id": "anon-html-attachment",
+    "from": "buyer4@example.invalid",
+    "subject": "Request for quotation",
+    "html": "<p>Please review the attached sample request.</p>",
+    "attachments": [{"name": "sample-request.pdf", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+    "tags": ["html_only", "attachment", "en"]
+  },
+  {
+    "id": "anon-forward-replyto-cc",
+    "from": "assistant@example.invalid",
+    "reply_to": "procurement@example.invalid",
+    "cc": ["observer@example.invalid"],
+    "subject": "Fwd: Anfrage",
+    "body": "Weitergeleitete Anfrage für ein Angebot.",
+    "tags": ["forward", "reply_to", "cc", "de"]
+  },
+  {
+    "id": "anon-same-subject-two-rfq",
+    "from": "buyer5@example.invalid",
+    "subject": "Prośba o ofertę",
+    "messages": ["Potrzebujemy CRM.", "To nowa sprawa: potrzebujemy OCR faktur."],
+    "tags": ["same_subject", "two_rfqs_same_customer", "pl"]
+  },
+  {
+    "id": "anon-parallel-restart",
+    "from": "buyer6@example.invalid",
+    "subject": "RFQ A / RFQ B",
+    "body": "Dwie niezależne wiadomości dotarły równolegle; odpowiadam po restarcie.",
+    "tags": ["parallel_mail", "reply_after_restart", "pl"]
+  },
+  {
+    "id": "anon-en-final",
+    "from": "buyer7@example.invalid",
+    "subject": "Final quote",
+    "body": "Final quote: EUR 7,200, payment in two installments, valid for 14 days.",
+    "tags": ["english_final_quote", "en"]
+  },
+  {
+    "id": "anon-quoted-old-id",
+    "from": "buyer8@example.invalid",
+    "subject": "New request",
+    "body": "This is a new request for invoice OCR.\n\nOn Friday someone wrote:\n> Previous deal deal-aaaaaaaaaaaaaaaaaaaaaaaa was about CRM.",
+    "tags": ["quoted_history", "quoted_old_deal_id", "en"]
+  }
+]

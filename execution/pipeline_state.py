@@ -35,7 +35,7 @@ class PipelineState:
 
     def is_processed(self, message_id: str) -> bool:
         row = self.store.get_message(str(message_id))
-        return bool(row and row["status"] in {"done", "precheck_skipped", "blocked"})
+        return bool(row and row["status"] in {"done", "precheck_skipped", "blocked", "manual_review"})
 
     def get(self, message_id: str) -> dict[str, Any] | None:
         row = self.store.get_message(str(message_id))
@@ -54,17 +54,15 @@ class PipelineState:
             raise ValueError("message_id must be a non-empty string")
         clean = dict(record or {})
         clean.setdefault("processed_at", utc_now())
-        operations = self.store.connection.execute("SELECT status FROM operations WHERE message_id=?", (key,)).fetchall()
-        action = str(clean.get("draft_action") or "")
-        if action in {"final_offer_blocked", "blocked_low_confidence", "blocked_missing_thread_headers", "blocked_existing_draft_present"}:
-            status = "blocked"
-        elif operations and any(
-            row["status"] in {"planned", "in_progress", "outcome_unknown", "retryable_failed"}
-            for row in operations
-        ):
-            status = "analysis_pending"
-        else:
-            status = "done"
+        outcome = str(clean.get("business_outcome") or "").strip()
+        status = {
+            "customer_succeeded": "done",
+            "draft_verified": "done",
+            "terminal_discard": "precheck_skipped",
+            "manual_action_required": "manual_review",
+            "retry_scheduled": "retry_scheduled",
+            "outcome_unknown": "reconciliation_pending",
+        }.get(outcome, "analysis_pending")
         self.store.record_message(key, clean, status=status, run_id_value=str(clean.get("processed_run_id") or run_id()))
         return clean
 
@@ -81,7 +79,9 @@ class PipelineState:
         return self.store.update_operation(str(message_id), action_type, status, **kwargs)
 
     def count(self) -> int:
-        row = self.store.connection.execute("SELECT COUNT(*) AS count FROM messages WHERE status IN ('done','precheck_skipped')").fetchone()
+        row = self.store.connection.execute(
+            "SELECT COUNT(*) AS count FROM messages WHERE status IN ('done','precheck_skipped','manual_review')"
+        ).fetchone()
         return int(row["count"] if row else 0)
 
     def save(self) -> Path:
@@ -101,8 +101,8 @@ def self_test() -> int:
         state = PipelineState(state_path)
         if state.count() != 0:
             failures.append("fresh state should be empty")
-        state.mark_processed("msg-1", {"classification": "new_quote_request", "processed_run_id": "r1"})
-        state.mark_processed("msg-2", {"classification": "newsletter_automated_spam", "wake_agent": False})
+        state.mark_processed("msg-1", {"classification": "new_quote_request", "business_outcome": "customer_succeeded", "processed_run_id": "r1"})
+        state.mark_processed("msg-2", {"classification": "newsletter_automated_spam", "business_outcome": "terminal_discard", "wake_agent": False})
         state.plan_operation("msg-1", "customer_draft", input_hash="input", content_hash="content")
         state.update_operation("msg-1", "customer_draft", "succeeded", external_draft_id="draft-1")
         if not state.operation_succeeded("msg-1", "customer_draft"):

@@ -134,12 +134,12 @@ def test_sheet_llm_receives_saved_and_missing_offer_data(monkeypatch, lead):
         "company_name_or_website": "Firma ABC",
         "mailbox_count": 50,
     }
-    assert captured["missing_data"][:2] == ["current_process", "inquiry_channels"]
+    assert captured["missing_data"] == []
     assert "company_name_or_website" not in captured["missing_data"]
     assert "mailbox_count" not in captured["missing_data"]
 
 
-def test_sheet_llm_dead_end_is_retried_once_then_rejected(monkeypatch, lead):
+def test_sheet_llm_optional_unknowns_do_not_create_a_discovery_dead_end(monkeypatch, lead):
     monkeypatch.setenv("HERMES_LLM_INTENT_ENABLED", "1")
     gsp = _reload_poller_with_env(monkeypatch, {"HERMES_LLM_INTENT_ENABLED": "1"})
     calls = 0
@@ -154,9 +154,9 @@ def test_sheet_llm_dead_end_is_retried_once_then_rejected(monkeypatch, lead):
 
     monkeypatch.setattr(gsp._lrw, "write_reply", fake_write_reply)
     gen = gsp.make_llm_body_generator(lead=lead, result={}, tenant_id="orchesta", run_id="r1")
-    with pytest.raises(gsp.ReplyValidationError, match="discovery_dead_end"):
-        gen({"body": synthesize_body_proxy(lead)})
-    assert calls == 2
+    result = gen({"body": synthesize_body_proxy(lead)})
+    assert result["validated"] is True
+    assert calls == 1
 
 
 def test_make_llm_body_generator_rejects_forbidden_term(monkeypatch, lead):
@@ -232,7 +232,7 @@ def test_service_account_path_selected_when_env_set(monkeypatch, tmp_path):
     sa_path.write_text(
         '{"type":"service_account","project_id":"x","private_key_id":"k","private_key":"'
         "<FAKE_SERVICE_ACCOUNT_PRIVATE_KEY_PEM>"
-        '","client_email":"identity-126@example.invalid","client_id":"1","token_uri":"https://oauth2.googleapis.com/token"}',
+        '","client_email":"identity-097@customer-062.example.com","client_id":"1","token_uri":"https://oauth2.googleapis.com/token"}',
         encoding="utf-8",
     )
     monkeypatch.setenv("HERMES_GOOGLE_SA_FILE", str(sa_path))

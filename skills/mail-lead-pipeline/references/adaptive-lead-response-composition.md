@@ -230,10 +230,11 @@ Nie musicie mieć już teraz gotowej listy wszystkich skrzynek ani decyzji o CRM
 
 Czy taki wariant startowy będzie dobrym punktem wyjścia? Jeśli tak, przygotuję na tej podstawie konkretny zakres i ofertę.
 
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq
 ```
 
 This is an example of the decision pattern, not a mandatory template.

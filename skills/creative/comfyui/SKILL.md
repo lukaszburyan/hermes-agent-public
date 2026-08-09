@@ -502,13 +502,13 @@ python3 scripts/run_workflow.py \
 Manual upload via REST:
 ```bash
 curl -X POST "http://127.0.0.1:8188/upload/image" \
-  -F "identity-033@example.invalid" -F "type=input" -F "overwrite=true"
+  -F "image=@photo.png" -F "type=input" -F "overwrite=true"
 # Returns: {"name": "photo.png", "subfolder": "", "type": "input"}
 
 # Cloud equivalent:
 curl -X POST "https://cloud.comfy.org/api/upload/image" \
   -H "X-API-Key: $COMFY_CLOUD_API_KEY" \
-  -F "identity-033@example.invalid" -F "type=input" -F "overwrite=true"
+  -F "image=@photo.png" -F "type=input" -F "overwrite=true"
 ```
 
 ## Cloud Specifics

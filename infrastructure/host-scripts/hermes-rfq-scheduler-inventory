@@ -23,6 +23,12 @@ SOURCES = {
         "entrypoint": "/opt/data/scripts/google-sheets-lead-poller.sh",
         "lock": "/opt/data/.tmp/google-sheets-lead-poller.lock",
     },
+    "claim_reaper": {
+        "timer": "hermes-rfq-claim-reaper.timer",
+        "service": "hermes-rfq-claim-reaper.service",
+        "entrypoint": "/opt/data/scripts/hermes-rfq-claim-reaper.sh",
+        "lock": "/opt/data/.tmp/hermes-rfq-claim-reaper.lock",
+    },
 }
 ALLOWED_AUXILIARY_TIMERS = {
     "hermes-rfq-release-monitor.timer",

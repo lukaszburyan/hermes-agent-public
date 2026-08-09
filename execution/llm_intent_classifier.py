@@ -87,6 +87,7 @@ LLM_CLASSIFIER_ENABLED_FLAG = "HERMES_LLM_INTENT_ENABLED"
 # so the prompt file loaded in production is unambiguous and auditable.
 PROMPT_VERSION = "incoming-classifier-v1"
 PROMPT_FILE = "prompts/incoming_mail_classifier_system.md"
+RISK_LEVEL = {"low": 0, "medium": 1, "high": 2}
 
 
 class LLMClient(Protocol):
@@ -257,6 +258,43 @@ def validate_classification(payload: dict[str, Any]) -> None:
         jsonschema.validate(payload, schema)
 
 
+def script_risk_level(safety_check: dict[str, Any] | None) -> str:
+    """Translate deterministic safety evidence into the model risk vocabulary."""
+    safety = safety_check or {}
+    explicit = str(safety.get("script_risk") or safety.get("risk") or "").strip().lower()
+    aliases = {"safe": "low", "review": "medium", "blocked": "high"}
+    if explicit in RISK_LEVEL:
+        return explicit
+    if explicit in aliases:
+        return aliases[explicit]
+    if any(safety.get(key) is True for key in ("hard_block", "blocked", "prompt_injection_detected")):
+        return "high"
+    if safety.get("attachments_safe") is False:
+        return "high"
+    if any(safety.get(key) is True for key in ("review_required", "ambiguous", "commercial_exception")):
+        return "medium"
+    return "low"
+
+
+def apply_script_risk_floor(
+    classification: dict[str, Any],
+    safety_check: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Allow the model to raise risk, but never lower deterministic risk."""
+    result = dict(classification or {})
+    model_risk = str(result.get("risk") or "low").strip().lower()
+    if model_risk not in RISK_LEVEL:
+        model_risk = "medium"
+    floor = script_risk_level(safety_check)
+    final_risk = max((model_risk, floor), key=lambda item: RISK_LEVEL[item])
+    result["risk"] = final_risk
+    reasons = list(result.get("decision_reasons") or [])
+    if RISK_LEVEL[final_risk] > RISK_LEVEL[model_risk]:
+        reasons.append(f"script_risk_floor:{floor}")
+    result["decision_reasons"] = list(dict.fromkeys(str(item) for item in reasons))
+    return result
+
+
 def _strip_json_fence(text: str) -> str:
     """Extract a JSON object from a possibly fenced / noisy LLM response."""
     match = re.search(r"\{.*\}", text, re.S)
@@ -381,6 +419,7 @@ def classify(
                 raw = client.complete(system_prompt, user_prompt, temperature=0.0)
             parsed = _parse_json(raw)
             validate_classification(parsed)
+            parsed = apply_script_risk_floor(parsed, safety_check)
             return {
                 "classification": parsed,
                 "action": decide_action(parsed),

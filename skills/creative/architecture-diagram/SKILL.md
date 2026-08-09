@@ -2,7 +2,7 @@
 name: architecture-diagram
 description: "Dark-themed SVG architecture/cloud/infra diagrams as HTML."
 version: 1.0.0
-author: Cocoon AI (identity-032@example.invalid), ported by Hermes Agent
+author: Cocoon AI (identity-019@customer-008.example.com), ported by Hermes Agent
 license: MIT
 dependencies: []
 platforms: [linux, macos, windows]

@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule Hermes RFQ expired-claim convergence
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=5s
+Persistent=true
+Unit=hermes-rfq-claim-reaper.service
+
+[Install]
+WantedBy=timers.target

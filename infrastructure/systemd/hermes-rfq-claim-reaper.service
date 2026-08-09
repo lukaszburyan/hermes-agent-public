@@ -1,0 +1,11 @@
+[Unit]
+Description=Converge expired Hermes RFQ response claims without sending mail
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/hermes-rfq-release.env
+ExecStart=/usr/bin/docker exec ${HERMES_CONTAINER_NAME} /opt/data/scripts/hermes-rfq-claim-reaper.sh
+TimeoutStartSec=60
+Nice=15

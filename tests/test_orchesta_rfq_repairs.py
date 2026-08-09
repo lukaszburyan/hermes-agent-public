@@ -192,8 +192,8 @@ def test_each_internal_event_is_a_fresh_email_with_unique_subject():
         }],
     }
     events = notify.build_notifications(summary)
-    assert [item[2].split(" | ")[2] for item in events] == ["PDF prepared", "final offer draft ready"]
-    assert len({item[2] for item in events}) == 2
+    assert [item[2].split(" | ")[2] for item in events] == ["Oferta gotowa"]
+    assert len({item[2] for item in events}) == 1
     for _key, _briefing, subject, body in events:
         assert subject.startswith("Orchesta RFQ | RFQ-20260804-0007 |")
         assert "Oferta nie została wysłana klientowi" in body
@@ -234,11 +234,11 @@ def test_each_internal_event_is_a_separate_exactly_once_telegram(tmp_path: Path)
     first = notify.deliver_telegram_notifications(summary, state_file=state, sender=fake_sender)
     second = notify.deliver_telegram_notifications(summary, state_file=state, sender=fake_sender)
     assert first["status"] == "sent"
-    assert first["sent_count"] == 2
-    assert [item["external_message_id"] for item in first["sent"]] == ["701", "702"]
-    assert [call["subject"].split(" | ")[2] for call in calls] == ["PDF prepared", "final offer draft ready"]
+    assert first["sent_count"] == 1
+    assert [item["external_message_id"] for item in first["sent"]] == ["701"]
+    assert [call["subject"].split(" | ")[2] for call in calls] == ["Oferta gotowa"]
     assert second["status"] == "already_delivered"
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -436,7 +436,7 @@ def test_pdf_control_requires_all_approved_content(tmp_path: Path, monkeypatch: 
         "Płatność 100% z góry",
         "Wdrożenie 14 dni",
         "14 dni gwarancji",
-        "Orchesta RFQ Team",
+        context["footer"],
     ])
     monkeypatch.setattr(final_offer, "extract_pdf_text_and_pages", lambda _path: (valid_text, 3, []))
     assert final_offer.validate_pdf(pdf, context)["ok"] is True

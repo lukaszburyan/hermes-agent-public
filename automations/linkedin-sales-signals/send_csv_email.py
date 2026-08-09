@@ -27,7 +27,7 @@ def send_resend(to, subject, body, attachment):
     key = os.getenv('RESEND_API_KEY')
     if not key:
         raise RuntimeError('RESEND_API_KEY missing')
-    sender = os.getenv('RESEND_FROM') or os.getenv('EMAIL_FROM') or 'Hermes <identity-001@example.invalid>'
+    sender = os.getenv('RESEND_FROM') or os.getenv('EMAIL_FROM') or 'Hermes <identity-001@customer-001.example.com>'
     p = Path(attachment)
     payload = {
         'from': sender,

@@ -72,7 +72,7 @@ git clone --depth 1 https://github.com/owner/repo-name.git
 git clone --branch develop https://github.com/owner/repo-name.git
 
 # Clone via SSH (if SSH is configured)
-git clone identity-038@example.invalid:owner/repo-name.git
+git clone identity-022@customer-011.example.com:owner/repo-name.git
 ```
 
 **With gh (shorthand):**

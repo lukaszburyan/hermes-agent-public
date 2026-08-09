@@ -68,7 +68,9 @@ def test_classifier_failed_outcome_records_prompt_version():
 
 
 def test_reply_prompt_version_constant_matches_spec():
-    assert lrw.PROMPT_VERSION == "incoming-reply-v2"
+    assert lrw.PROMPT_VERSION == (
+        f"incoming-reply-v3:{lrw.REPLY_CONTRACT_VERSION}:{lrw.REPLY_CONTRACT_DIGEST[:12]}"
+    )
     assert lrw.PROMPT_FILE == "prompts/incoming_mail_reply_system.md"
     assert (ROOT / lrw.PROMPT_FILE).exists()
 
@@ -86,7 +88,7 @@ def test_reply_outcome_records_prompt_version():
         llm_client=_ReplyOKClient(),
         run_id="r3",
     )
-    assert out["prompt_version"] == "incoming-reply-v2"
+    assert out["prompt_version"] == lrw.PROMPT_VERSION
     assert out["prompt_file"] == "prompts/incoming_mail_reply_system.md"
 
 
@@ -106,5 +108,5 @@ def test_reply_failed_outcome_records_prompt_version():
         llm_client=_Bad(),
         run_id="r4",
     )
-    assert out["prompt_version"] == "incoming-reply-v2"
+    assert out["prompt_version"] == lrw.PROMPT_VERSION
     assert out["reply"] is None

@@ -58,14 +58,14 @@ def _cls(payload):
 
 
 def test_1_krzysztof_message_routes_to_discovery():
-    out = lic.classify(subject="x", body="chciałem zapytać o system", sender="identity-108@example.invalid",
+    out = lic.classify(subject="x", body="chciałem zapytać o system", sender="identity-017@gmail.com",
                       recipient="rfq-mailbox@example.invalid", tenant_id="orchesta",
                       llm_client=_C(_cls({})), run_id="a1")
     assert out["action"] == "ask_discovery_questions"
 
 
 def test_2_gmail_does_not_block_first_contact():
-    out = lic.classify(subject="x", body="pytam o system", sender="identity-108@example.invalid",
+    out = lic.classify(subject="x", body="pytam o system", sender="identity-017@gmail.com",
                       recipient="rfq-mailbox@example.invalid", tenant_id="orchesta",
                       llm_client=_C(_cls({"sender_identity": "free_email_unverified"})), run_id="a2")
     assert out["action"] != "block_security"
@@ -74,7 +74,7 @@ def test_2_gmail_does_not_block_first_contact():
 
 def test_3_product_name_not_required():
     out = lic.classify(subject="", body="szukam sposobu na obsługę wiadomości",
-                      sender="identity-109@example.invalid", recipient="rfq-mailbox@example.invalid", tenant_id="orchesta",
+                      sender="identity-085@customer-057.example.com", recipient="rfq-mailbox@example.invalid", tenant_id="orchesta",
                       llm_client=_C(_cls({})), run_id="a3")
     assert out["action"] == "ask_discovery_questions"
 
@@ -139,7 +139,7 @@ def test_8_followups_reference_last_customer_statement():
 def test_9_no_telegram_in_conversation_or_offer():
     html = rfo.render_offer_html_for_tenant({
         "offer": {"offer_number": "X", "version": 1, "date": "2026-08-03"},
-        "client": {"full_name": "K", "company": "C", "email": "identity-110@example.invalid"},
+        "client": {"full_name": "K", "company": "C", "email": "identity-086@customer-058.example.com"},
         "scope": {"mailbox_count": 1, "mailbox_label": "k", "crm_label": "nie", "inquiry_source_label": "mail"},
         "pricing": {"line_items": [{"name": "x", "net_display": "1 zł"}], "net_total_display": "1 zł"},
         "roi": {"title": "t", "description": "d", "hours_text": "h", "cost_text": "c"},
@@ -164,7 +164,7 @@ def test_10_telegram_only_as_orchesta_internal_alarm():
 def test_11_second_company_gets_no_orchesta_data():
     html = rfo.render_offer_html_for_tenant({
         "offer": {"offer_number": "ABC-1", "version": 1, "date": "2026-08-03"},
-        "client": {"full_name": "Jan K", "company": "Firma ABC", "email": "identity-111@example.invalid"},
+        "client": {"full_name": "Jan K", "company": "Firma ABC", "email": "identity-087@customer-059.example.com"},
         "scope": {"mailbox_count": 1, "mailbox_label": "stanowisko", "crm_label": "nie", "inquiry_source_label": "mail"},
         "pricing": {"line_items": [{"name": "Firma ABC, wdrożenie podstawowe", "net_display": "5000 zł"}], "net_total_display": "5000 zł"},
         "roi": {"title": "t", "description": "d", "hours_text": "h", "cost_text": "c"},
@@ -216,7 +216,7 @@ def test_16_full_path_test_passes_automatically():
     # Reuse the mandatory test_8 flow; no manual DB cleanup, no missing-field error.
     with tempfile.TemporaryDirectory() as tmp:
         reg = ulr.UnifiedLeadRegistry(Path(tmp) / "r.sqlite3")
-        d = reg.register_event(source_type="sheet", source_key="row-1", email="identity-112@example.invalid",
+        d = reg.register_event(source_type="sheet", source_key="row-1", email="identity-088@customer-059.example.com",
                                company="", contact_name="M", content="z", relation="new", tenant_id="orchesta")
         saved = reg.record_provided_information(d["deal_id"],
             {"company_name_or_website": "ABC", "monthly_volume": "300", "mailbox_count": 3, "crm": True},
@@ -232,7 +232,9 @@ def test_17_prompts_loaded_from_separate_files():
     assert lic.load_system_prompt().strip() != ""
     assert lrw.load_system_prompt().strip() != ""
     assert lic.PROMPT_VERSION == "incoming-classifier-v1"
-    assert lrw.PROMPT_VERSION == "incoming-reply-v2"
+    assert lrw.PROMPT_VERSION == (
+        f"incoming-reply-v3:{lrw.REPLY_CONTRACT_VERSION}:{lrw.REPLY_CONTRACT_DIGEST[:12]}"
+    )
 
 
 def test_18_auto_send_stops_with_one_flag():

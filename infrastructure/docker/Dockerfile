@@ -34,11 +34,13 @@ RUN /opt/hermes/.venv/bin/python -c 'from pathlib import Path; path = Path("/opt
 COPY --from=node-security /opt/hermes-node-security/node_modules/brace-expansion /usr/local/lib/node_modules/npm/node_modules/brace-expansion
 COPY --from=node-security /opt/hermes-node-security/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address
 COPY --from=node-security /opt/hermes-node-security/node_modules/brace-expansion /opt/hermes/node_modules/brace-expansion
+COPY --from=node-security /opt/hermes-node-security/node_modules/nanoid /opt/hermes/node_modules/postcss/node_modules/nanoid
 COPY --from=node-security /opt/hermes-node-security/node_modules/undici /opt/hermes/plugins/platforms/photon/sidecar/node_modules/undici
 
 RUN npm pkg set overrides.brace-expansion=5.0.9 --prefix /opt/hermes \
+    && npm pkg set overrides.nanoid=3.3.17 --prefix /opt/hermes \
     && npm pkg set overrides.undici=7.29.0 --prefix /opt/hermes/plugins/platforms/photon/sidecar \
-    && node -e 'const expected={"/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json":"5.0.9","/usr/local/lib/node_modules/npm/node_modules/ip-address/package.json":"10.3.1","/usr/local/lib/node_modules/npm/node_modules/tar/package.json":"7.5.19","/usr/local/lib/node_modules/npm/node_modules/undici/package.json":"6.27.0","/opt/hermes/node_modules/brace-expansion/package.json":"5.0.9","/opt/hermes/plugins/platforms/photon/sidecar/node_modules/undici/package.json":"7.29.0"}; for (const [path, version] of Object.entries(expected)) { if (require(path).version !== version) process.exit(1); }' \
+    && node -e 'const expected={"/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json":"5.0.9","/usr/local/lib/node_modules/npm/node_modules/ip-address/package.json":"10.3.1","/usr/local/lib/node_modules/npm/node_modules/tar/package.json":"7.5.19","/usr/local/lib/node_modules/npm/node_modules/undici/package.json":"6.27.0","/opt/hermes/node_modules/brace-expansion/package.json":"5.0.9","/opt/hermes/node_modules/postcss/node_modules/nanoid/package.json":"3.3.17","/opt/hermes/plugins/platforms/photon/sidecar/node_modules/undici/package.json":"7.29.0"}; for (const [path, version] of Object.entries(expected)) { if (require(path).version !== version) process.exit(1); }' \
     && npm --prefix /opt/hermes ls brace-expansion --all \
     && npm --prefix /opt/hermes/plugins/platforms/photon/sidecar ls undici --all
 
@@ -51,19 +53,28 @@ COPY automations /opt/hermes-release/app/automations
 COPY directives /opt/hermes-release/app/directives
 COPY docs /opt/hermes-release/app/docs
 COPY execution /opt/hermes-release/app/execution
+COPY prompts /opt/hermes-release/app/prompts
 COPY schemas /opt/hermes-release/app/schemas
 COPY scripts /opt/hermes-release/app/scripts
 COPY skills /opt/hermes-release/app/skills
 COPY tenants /opt/hermes-release/app/tenants
+COPY infrastructure/systemd /opt/hermes-release/app/infrastructure/systemd
+COPY requirements-ci.lock requirements-release.lock requirements-base-security.lock /opt/hermes-release/app/
+COPY MESSAGE_POLICY.md /opt/hermes-release/app/MESSAGE_POLICY.md
 COPY tests/fixtures/mail-lead-pipeline/zoho_poll_sample.json /opt/hermes-release/app/tests/fixtures/mail-lead-pipeline/zoho_poll_sample.json
 COPY SOUL.md .env.example /opt/hermes-release/app/
 COPY infrastructure/docker/release-entrypoint.sh /opt/hermes-release/release-entrypoint.sh
 
-RUN chmod 0755 /opt/hermes-release/release-entrypoint.sh \
+RUN printf '%s\n' "$HERMES_RELEASE_COMMIT" >/opt/hermes-release/IMAGE_RELEASE_COMMIT \
+    && printf '%s\n' "$HERMES_RELEASE_TAG" >/opt/hermes-release/IMAGE_RELEASE_TAG \
+    && chmod 0444 /opt/hermes-release/IMAGE_RELEASE_COMMIT /opt/hermes-release/IMAGE_RELEASE_TAG \
+    && chmod 0755 /opt/hermes-release/release-entrypoint.sh \
     /opt/hermes-release/app/scripts/*.sh \
     /opt/hermes-release/app/execution/*.sh \
     /opt/hermes-release/app/execution/hermes_release_monitor.py \
-    /opt/hermes-release/app/execution/hermes_state_backup.py
+    /opt/hermes-release/app/execution/hermes_state_backup.py \
+    /opt/hermes-release/app/execution/legacy_source_reconciliation.py \
+    /opt/hermes-release/app/execution/response_claim_reaper.py
 
 ENV HERMES_APP_PYTHON=/opt/hermes-release/.venv/bin/python \
     HERMES_RFQ_VENV_PYTHON=/opt/hermes-release/.venv/bin/python \

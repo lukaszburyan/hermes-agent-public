@@ -104,9 +104,29 @@
           <span>Razem</span>
           <strong>{{ pricing.net_total_display }} netto</strong>
         </div>
+        {% for item in pricing.optional_variants|default([]) %}
+        <div class="price-row">
+          <span>Opcjonalnie: {{ item.name }}</span>
+          <strong>+{{ item.net_display }} netto · razem {{ item.total_if_selected_display }} netto</strong>
+        </div>
+        {% endfor %}
       </div>
+      {% if assumptions|default([]) %}
       <div class="terms">
+        <p><strong>Założenia do potwierdzenia:</strong></p>
+        {% for assumption in assumptions|default([]) %}
+        <p>{{ assumption.label }}.</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="terms">
+        {% if scope.crm|default(false) %}
         <p><strong>CRM:</strong> Integracja obejmuje podstawowe zapisanie zdarzenia jako leada w CRM.</p>
+        {% elif pricing.optional_variants|default([]) %}
+        <p><strong>CRM:</strong> integracja pozostaje opcją i może zostać dodana po potwierdzeniu.</p>
+        {% else %}
+        <p><strong>CRM:</strong> integracja nie jest ujęta w tym zakresie.</p>
+        {% endif %}
         <p><strong>Płatność:</strong> 100% z góry.</p>
         <p><strong>Wdrożenie:</strong> 14 dni.</p>
         <p><strong>Tryb pierwszych 14 dni:</strong> system działa kontrolnie i przygotowuje drafty na skrzynce pocztowej, aby potwierdzić jakość odpowiedzi i dopasowanie logiki do firmy.</p>

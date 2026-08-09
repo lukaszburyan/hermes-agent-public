@@ -51,7 +51,7 @@ def test_unknown_stage_returns_empty():
 
 
 def test_orchesta_internal_notification_recipient_is_the_approved_owner_mailbox():
-    assert tenant_config.internal_notification_email("orchesta") == "identity-008@example.invalid"
+    assert tenant_config.internal_notification_email("orchesta") == "identity-004@gmail.com"
 
 
 def test_customer_visible_fields_for_final_offer():

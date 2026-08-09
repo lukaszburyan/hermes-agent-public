@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTION = ROOT / "execution"
 if str(EXECUTION) not in sys.path:
@@ -29,7 +31,7 @@ def test_resolve_tenant_id_does_not_default_to_orchesta_for_unknown_mailbox():
     # Spec section 2: unknown mailbox must NOT fall back to the Orchesta profile.
     assert resolve_tenant_id("random@unmapped.test") == ""
     assert resolve_tenant_id("rfq-mailbox@example.invalid") == "orchesta"
-    assert resolve_tenant_id("identity-007@example.invalid") == "orchesta"
+    assert resolve_tenant_id("identity-004@customer-004.example.com") == "orchesta"
 
 
 def test_known_mailbox_resolves_to_orchesta(tmp_path: Path):
@@ -45,16 +47,11 @@ def test_known_mailbox_resolves_to_orchesta(tmp_path: Path):
 
 
 def test_unknown_mailbox_routes_to_awaiting_human(tmp_path: Path):
-    summary = poll(
-        FakeZohoClient(dataset()),
-        PipelineState(tmp_path / "state.sqlite3"),
-        load_classifier(),
-        target_email="unknown@nowhere.test",
-        run_id="test-tenant-unknown",
-    )
-    assert summary["tenant_id"] == ""
-    assert summary["state"] == "awaiting_human"
-    assert summary["decision_reason"] == "tenant_not_resolved"
-    # No per-message processing happened for an unresolved tenant.
-    assert summary["woken"] == 0
-    assert summary["drafts_created"] == 0
+    with pytest.raises(RuntimeError, match="zoho_account_resolution_failed"):
+        poll(
+            FakeZohoClient(dataset()),
+            PipelineState(tmp_path / "state.sqlite3"),
+            load_classifier(),
+            target_email="unknown@nowhere.test",
+            run_id="test-tenant-unknown",
+        )

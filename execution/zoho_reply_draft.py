@@ -56,7 +56,8 @@ DEFAULT_DRAFT_LLM_TIMEOUT_SECONDS = 120
 # when --i-have-lukasz-approval is passed AND the environment flag is set.
 APPROVAL_PHRASE = "LUKASZ-APPROVED-DRAFT-CREATE"
 
-SIGNATURE = "Orchesta RFQ Team\n\n+48 000 000 000\nLinkedIn: example.invalid/orchesta-rfq"
+SIGNATURE = "--\nŁukasz Buryan\n\ntel. +48 000 000 000\nLinkedIn. example.invalid/orchesta-rfq"
+LEGACY_SIGNATURE_NAMES = ("Orchesta RFQ Team",)
 
 # Draft kinds that must never contain pricing (first response / discovery).
 NO_PRICE_DRAFT_KINDS = {"first_response", "context_reply", "discovery"}
@@ -125,19 +126,22 @@ def contains_emoji(text: str) -> bool:
 
 def ensure_signature(body: str) -> str:
     body = (body or "").rstrip()
-    if "Orchesta RFQ Team" in body:
+    if body.endswith(SIGNATURE):
         return body
-    return f"{body}\n\n{SIGNATURE}"
+    return f"{strip_signature(body)}\n\n{SIGNATURE}"
 
 
 def strip_signature(body: str) -> str:
     """Keep the signature programmatic and single-source."""
     text = (body or "").rstrip()
+    if text.endswith(SIGNATURE):
+        return text[: -len(SIGNATURE)].rstrip()
     for marker in ("\n--\nOrchesta RFQ Team", "\nOrchesta RFQ Team"):
         if marker in text:
             return text.split(marker, 1)[0].rstrip()
-    if "Orchesta RFQ Team" in text:
-        return text.split("Orchesta RFQ Team", 1)[0].rstrip().rstrip("-").rstrip()
+    for legacy_name in LEGACY_SIGNATURE_NAMES:
+        if legacy_name in text:
+            return text.split(legacy_name, 1)[0].rstrip().rstrip("-").rstrip()
     return text
 
 
@@ -217,7 +221,7 @@ def build_draft_payload(
     if leaked_terms:
         raise DraftSafetyError(f"draft body must not expose internal extraction terms: {sorted(set(leaked_terms))}")
 
-    if re.search(r"(?m)^\s*--\s*$", body_text or ""):
+    if re.search(r"(?m)^\s*--\s*$", body_text or "") and not (body_text or "").rstrip().endswith(SIGNATURE):
         raise DraftSafetyError("draft body must not contain a standalone signature delimiter")
 
     if (
@@ -1366,27 +1370,25 @@ def self_test() -> int:
 
     payload = build_draft_payload(
         account_email=DEFAULT_TARGET_EMAIL,
-        to_address="identity-025@example.invalid",
+        to_address="identity-013@customer-006.example.com",
         inbound_subject="Zapytanie ofertowe z formularza",
-        rfc_message_id="<identity-026@example.invalid>",
+        rfc_message_id="<identity-014@customer-006.example.com>",
         references="",
         body_text=body,
         draft_kind="first_response",
     )
     if payload.get("mode") != "draft":
         failures.append("first-response payload is not a draft")
-    if payload.get("inReplyTo") != "<identity-026@example.invalid>":
+    if payload.get("inReplyTo") != "<identity-014@customer-006.example.com>":
         failures.append("first-response payload is not threaded to the inbound message")
     if payload.get("subject") != "Re: Zapytanie ofertowe z formularza":
         failures.append(f"unexpected reply subject: {payload.get('subject')}")
     if SEND_FORBIDDEN_KEYS & set(payload.keys()):
         failures.append("draft payload contains send-style fields")
-    if "Orchesta RFQ Team" not in escape(payload["content"]).replace("&lt;", "<"):
-        # content is html-escaped; just confirm signature text is present in source body
-        if "Orchesta RFQ Team" not in ensure_signature(body):
-            failures.append("signature missing from first-response draft")
-    if "<br>--<br>" in payload["content"] or "\n--\n" in ensure_signature(body):
-        failures.append("signature should not include standalone double-hyphen delimiter")
+    if "Łukasz Buryan" not in escape(payload["content"]).replace("&lt;", "<"):
+        failures.append("signature missing from first-response draft")
+    if not ensure_signature(body).endswith(SIGNATURE):
+        failures.append("first-response draft should end with the exact approved signature")
 
     # 2) refHeader combines prior references with the inbound message id.
     threaded = build_draft_payload(
@@ -1405,7 +1407,7 @@ def self_test() -> int:
     try:
         build_draft_payload(
             account_email=DEFAULT_TARGET_EMAIL,
-            to_address="identity-027@example.invalid",
+            to_address="identity-015@customer-007.example.com",
             inbound_subject="RFQ",
             rfc_message_id="",
             body_text="Treść.",
@@ -1419,9 +1421,9 @@ def self_test() -> int:
     try:
         build_draft_payload(
             account_email=DEFAULT_TARGET_EMAIL,
-            to_address="identity-027@example.invalid",
+            to_address="identity-015@customer-007.example.com",
             inbound_subject="RFQ",
-            rfc_message_id="<identity-028@example.invalid>",
+            rfc_message_id="<identity-016@customer-007.example.com>",
             body_text="Inwestycja to 7200 zł netto za podłączenie skrzynki.",
             draft_kind="first_response",
         )
@@ -1433,9 +1435,9 @@ def self_test() -> int:
     try:
         offer = build_draft_payload(
             account_email=DEFAULT_TARGET_EMAIL,
-            to_address="identity-027@example.invalid",
+            to_address="identity-015@customer-007.example.com",
             inbound_subject="Wycena Orchesta RFQ",
-            rfc_message_id="<identity-028@example.invalid>",
+            rfc_message_id="<identity-016@customer-007.example.com>",
             body_text="Proponowany zakres i inwestycja: podłączenie skrzynki 7200 zł netto. To propozycja do review.",
             draft_kind="final_offer",
         )
@@ -1449,16 +1451,17 @@ def self_test() -> int:
         "Dzień dobry Panie Tomaszu,\n\n"
         "w załączniku dodaję gotową ofertę wdrożenia systemu Orchesta.\n\n"
         "W razie akceptacji wystarczy odpowiedzieć na tę wiadomość.\n\n"
-        "Orchesta RFQ Team\n\n"
-        "+48 000 000 000\n"
-        "LinkedIn: example.invalid/orchesta-rfq"
+        "--\n"
+        "Łukasz Buryan\n\n"
+        "tel. +48 000 000 000\n"
+        "LinkedIn. example.invalid/orchesta-rfq"
     )
     try:
         final_offer = build_draft_payload(
             account_email=DEFAULT_TARGET_EMAIL,
-            to_address="identity-029@example.invalid",
+            to_address="identity-017@customer-007.example.com",
             inbound_subject="Re: Oferta",
-            rfc_message_id="<identity-030@example.invalid>",
+            rfc_message_id="<identity-018@customer-007.example.com>",
             body_text=final_footer_body,
             draft_kind="final_offer",
             attachments=[
@@ -1478,9 +1481,9 @@ def self_test() -> int:
     try:
         build_draft_payload(
             account_email=DEFAULT_TARGET_EMAIL,
-            to_address="identity-027@example.invalid",
+            to_address="identity-015@customer-007.example.com",
             inbound_subject="RFQ",
-            rfc_message_id="<identity-028@example.invalid>",
+            rfc_message_id="<identity-016@customer-007.example.com>",
             body_text="Dzień dobry 🙂 dziękuję za wiadomość.",
             draft_kind="first_response",
         )

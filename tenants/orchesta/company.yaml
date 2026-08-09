@@ -11,14 +11,16 @@ company:
   language: pl
 
 seller:
-  first_name: Orchesta
-  last_name: RFQ Team
-  full_name: Orchesta RFQ Team
+  first_name: Łukasz
+  last_name: Buryan
+  full_name: Łukasz Buryan
   phone: "+48 000 000 000"
   linkedin: https://example.invalid/orchesta-rfq
 
 # Footer used in customer-facing replies and the PDF offer.
 footer: |-
-  Orchesta RFQ Team
+  --
+  Łukasz Buryan
 
-  Kontakt przez skrzynkę firmową
+  tel. +48 000 000 000
+  LinkedIn. example.invalid/orchesta-rfq

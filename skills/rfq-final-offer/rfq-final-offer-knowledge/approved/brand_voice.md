@@ -17,8 +17,9 @@ The offer should feel like a concise business document, not a legal document and
 Use the exact footer:
 
 ```text
-Orchesta RFQ Team
+--
+Łukasz Buryan
 
-+48 000 000 000
-LinkedIn: example.invalid/orchesta-rfq
+tel. +48 000 000 000
+LinkedIn. example.invalid/orchesta-rfq
 ```

@@ -23,13 +23,15 @@ def test_orchesta_company_identity_lives_in_tenant_package():
     company = tenant_config.load_company("orchesta")
     assert company["company"]["name"] == "Orchesta"
     assert company["company"]["mailbox"] == "rfq-mailbox@example.invalid"
-    assert company["seller"]["full_name"] == "Orchesta RFQ Team"
+    assert company["seller"]["full_name"] == "Łukasz Buryan"
+    assert company["seller"]["phone"] == "+48 000 000 000"
+    assert company["seller"]["linkedin"] == "https://example.invalid/orchesta-rfq"
 
 
 def test_firma_abc_company_identity_is_distinct_from_orchesta():
     company = tenant_config.load_company("firma_abc")
     assert company["company"]["name"] == "Firma ABC"
-    assert company["company"]["mailbox"] == "identity-068@example.invalid"
+    assert company["company"]["mailbox"] == "identity-048@customer-030.example.com"
     assert company["seller"]["full_name"] != "Orchesta RFQ Team"
 
 

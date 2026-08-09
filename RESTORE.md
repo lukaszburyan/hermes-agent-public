@@ -33,7 +33,7 @@ The script refuses to overwrite a non-empty Hermes data directory.
 On the target host:
 
 1. Restore the mode-`0600` runtime environment without `OPENAI_API_KEY`.
-2. Restore `auth.json`, Google OAuth files and rclone configuration from their approved secret store.
+2. Restore `auth.json`, Google OAuth files and rclone configuration from their approved secret store. Put `rclone.conf` inside a dedicated mode-`0700` directory and mount that directory, not the individual file, so OAuth refresh can replace the config atomically.
 3. Reconnect Hermes-managed OpenAI Codex OAuth and Google/Zoho integrations.
 4. Re-pair Telegram and verify its allowlist.
 5. Run `hermes-release-preflight` before starting any service.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ if str(EXECUTION) not in sys.path:
     sys.path.insert(0, str(EXECUTION))
 
 from unified_lead_registry import UnifiedLeadRegistry  # noqa: E402
-from send_reconciliation import reconcile_sent_rows  # noqa: E402
+from send_reconciliation import append_marker, reconcile_sent_rows  # noqa: E402
 from zoho_pre_offer_send import (  # noqa: E402
     APPROVAL_PHRASE,
     build_pre_offer_payload,
@@ -133,7 +134,7 @@ def test_two_processes_apply_each_numbered_migration_once(tmp_path: Path):
     ctx = _process_context()
     with ctx.Pool(processes=2) as pool:
         versions = pool.map(_open_registry_worker, [str(database), str(database)])
-    assert versions == [3, 3]
+    assert versions == [4, 4]
     connection = sqlite3.connect(database)
     rows = connection.execute(
         "SELECT version,name FROM schema_versions WHERE namespace='unified_lead_registry'"
@@ -149,6 +150,7 @@ def test_two_processes_apply_each_numbered_migration_once(tmp_path: Path):
         (1, "durable_outbox_and_claim_metadata"),
         (2, "auditable_security_event_resolution"),
         (3, "durable_contact_identity"),
+        (4, "authoritative_response_lifecycle"),
     ]
     assert {"operation_id", "message_type", "recipient", "contact_identity", "outcome"} <= columns
     assert outbox_exists == (1,)
@@ -248,6 +250,38 @@ def test_transport_exception_after_post_starts_is_outcome_unknown(
     assert operation["content_hash"] == expected_hash
     assert registry.security_events("send_outcome_unknown")
     registry.close()
+
+
+def test_sent_content_visibility_error_never_becomes_not_found_or_retryable():
+    operation = {"created_at": "2026-08-08T10:00:00+00:00"}
+    result = reconcile_sent_rows(
+        operation,
+        marker="operation-visible",
+        sent_rows=[{"messageId": "sent-1", "subject": "RFQ"}],
+        row_matches=lambda _row: True,
+        fetch_content=lambda _row: (_ for _ in ()).throw(TimeoutError("provider unavailable")),
+        row_id=lambda row: str(row["messageId"]),
+    )
+    assert result["resolved"] is False
+    assert result["status"] == "provider_visibility_error"
+    assert result["retryable"] is False
+
+
+def test_provider_sanitized_hidden_marker_fails_closed_without_visible_reference():
+    marker = "operation-provider-sanitized"
+    payload = append_marker({"content": "Sent once", "mailFormat": "html"}, marker)
+    provider_content = re.sub(r"<!--.*?-->", "", payload["content"], flags=re.DOTALL)
+    assert "hermes-send-marker:" not in provider_content
+
+    result = reconcile_sent_rows(
+        {"created_at": "2026-08-08T10:00:00+00:00"},
+        marker=marker,
+        sent_rows=[{"messageId": "sent-provider-stable", "content": provider_content}],
+        row_matches=lambda _row: True,
+        row_id=lambda row: str(row["messageId"]),
+    )
+    assert result["resolved"] is False
+    assert result["status"] == "not_found"
 
 
 def test_timeout_after_acceptance_reconciles_exact_marker_without_second_send(

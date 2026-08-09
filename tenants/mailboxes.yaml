@@ -10,9 +10,9 @@
 mailboxes:
   rfq-mailbox@example.invalid:
     tenant_id: orchesta
-  identity-069@example.invalid:
+  identity-049@customer-031.example.com:
     tenant_id: orchesta
-  identity-007@example.invalid:
+  identity-004@customer-004.example.com:
     tenant_id: orchesta
-  identity-068@example.invalid:
+  identity-048@customer-030.example.com:
     tenant_id: firma_abc

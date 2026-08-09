@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from fnmatch import fnmatch
 import hashlib
 import json
 import os
@@ -48,6 +49,7 @@ RECONCILIATION_CHECKS = (
     "zoho_drafts_reconciled",
     "google_sheets_reconciled",
     "recipient_bindings_reconciled",
+    "lifecycle_inventory_reconciled",
 )
 
 
@@ -267,10 +269,23 @@ def upload_offsite(*, backup: Path, remote_directory: str) -> dict[str, Any]:
     remote_root = remote_directory.rstrip("/")
     remote_backup = f"{remote_root}/{backup.name}"
     run_checked(["rclone", "copyto", str(backup), remote_backup])
-    hash_output = run_checked(["rclone", "hashsum", "SHA-256", remote_backup]).stdout.split()
-    if not hash_output:
-        raise BackupError("offsite_checksum_missing")
-    remote_hash = hash_output[0]
+    verification_method = "provider_hashsum"
+    try:
+        hash_output = run_checked(["rclone", "hashsum", "SHA-256", remote_backup]).stdout.split()
+        if not hash_output:
+            raise BackupError("offsite_checksum_missing")
+        remote_hash = hash_output[0]
+    except BackupError as hash_error:
+        downloaded = subprocess.run(
+            ["rclone", "cat", remote_backup],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if downloaded.returncode != 0:
+            raise BackupError("offsite_checksum_unavailable") from hash_error
+        remote_hash = hashlib.sha256(downloaded.stdout).hexdigest()
+        verification_method = "download_and_local_sha256"
     local_hash = sha256_file(backup)
     if remote_hash.lower() != local_hash:
         raise BackupError("offsite_checksum_mismatch")
@@ -280,6 +295,8 @@ def upload_offsite(*, backup: Path, remote_directory: str) -> dict[str, Any]:
     evidence["offsite_verified"] = True
     evidence["offsite_remote"] = remote_backup
     evidence["offsite_verified_at"] = utc_now()
+    evidence["offsite_verification_method"] = verification_method
+    evidence["offsite_download_sha256"] = remote_hash.lower()
     write_json(metadata_path, evidence)
     run_checked(["rclone", "copyto", str(metadata_path), f"{remote_root}/{metadata_path.name}"])
     return evidence
@@ -307,14 +324,63 @@ def apply_offsite_retention(
     )
     command = ["rclone", "delete", remote_root, "--min-age", f"{retention_days}d"]
     for pattern in patterns:
-        command.extend(["--include", pattern])
-    command.extend(["--exclude", "*"])
+        command.extend(["--filter", f"+ {pattern}"])
+    command.extend(["--filter", "- *"])
     run_checked(command)
     return {
         "offsite_retention_days": retention_days,
         "offsite_retention_applied_at": utc_now(),
+        "offsite_retention_action": "deleted_expired_objects",
         "offsite_retention_patterns": list(patterns),
     }
+
+
+def evaluate_offsite_retention(*, remote_directory: str, retention_days: int) -> dict[str, Any]:
+    """Inventory expired backup objects without deleting them."""
+    if retention_days < 1:
+        raise BackupError("invalid_backup_retention_days")
+    remote_name, separator, remote_path = remote_directory.partition(":")
+    if not separator or not remote_name.strip() or not remote_path.strip("/"):
+        raise BackupError("backup_retention_requires_dedicated_remote_directory")
+    remote_root = remote_directory.rstrip("/")
+    patterns = (
+        "/hermes-state-*.tar.gz.age",
+        "/hermes-state-*.tar.gz.age.sha256",
+        "/hermes-state-*.tar.gz.age.metadata.json",
+    )
+    command = [
+        "rclone", "lsjson", remote_root, "--max-depth", "1", "--files-only",
+        "--min-age", f"{retention_days}d",
+    ]
+    try:
+        raw = json.loads(run_checked(command).stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise BackupError("backup_retention_inventory_invalid") from exc
+    if not isinstance(raw, list):
+        raise BackupError("backup_retention_inventory_invalid")
+    candidate_names = (
+        str(item.get("Path") or item.get("Name") or "").strip()
+        for item in raw
+        if isinstance(item, dict)
+    )
+    names = sorted(
+        name for name in candidate_names
+        if name and any(fnmatch(name, pattern.lstrip("/")) for pattern in patterns)
+    )
+    evaluated_at = utc_now()
+    result: dict[str, Any] = {
+        "offsite_retention_days": retention_days,
+        "offsite_retention_evaluated_at": evaluated_at,
+        "offsite_retention_patterns": list(patterns),
+        "offsite_expired_objects": len(names),
+        "offsite_expired_object_names": names,
+        "offsite_retention_action": (
+            "evaluated_no_expired_objects" if not names else "expired_objects_pending_approval"
+        ),
+    }
+    if not names:
+        result["offsite_retention_applied_at"] = evaluated_at
+    return result
 
 
 def _safe_extract(bundle: tarfile.TarFile, destination: Path) -> None:
@@ -421,6 +487,7 @@ def acknowledge_restore(*, target: Path, actor: str, evidence: dict[str, Any]) -
     registry = target / ".tmp" / "orchesta-rfq-unified.sqlite3"
     sqlite_integrity(registry)
     connection = sqlite3.connect(f"file:{registry}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
     try:
         tables = {
             str(row[0])
@@ -431,10 +498,46 @@ def acknowledge_restore(*, target: Path, actor: str, evidence: dict[str, Any]) -
             if "unified_outbox" in tables
             else -1
         )
+        active_outbox = (
+            int(connection.execute(
+                "SELECT COUNT(*) FROM unified_outbox WHERE status IN ('claimed','in_progress','outcome_unknown')"
+            ).fetchone()[0])
+            if "unified_outbox" in tables else -1
+        )
+        artifact_creating = (
+            int(connection.execute(
+                "SELECT COUNT(*) FROM unified_artifacts WHERE status='creating'"
+            ).fetchone()[0])
+            if "unified_artifacts" in tables else -1
+        )
+        terminal_with_claim = (
+            int(connection.execute(
+                "SELECT COUNT(*) FROM unified_outbox WHERE status IN "
+                "('sent','sent_manually','draft_created','validation_failed','manual_review','permanent_failed') "
+                "AND (COALESCE(owner,'')!='' OR COALESCE(lease_expires_at,'')!='')"
+            ).fetchone()[0])
+            if "unified_outbox" in tables else -1
+        )
+        review_without_task = (
+            int(connection.execute(
+                "SELECT COUNT(*) FROM unified_deals d WHERE d.status='review_required' "
+                "AND NOT EXISTS (SELECT 1 FROM unified_review_tasks t "
+                "WHERE t.deal_id=d.deal_id AND t.status='open')"
+            ).fetchone()[0])
+            if {"unified_deals", "unified_review_tasks"}.issubset(tables) else -1
+        )
     finally:
         connection.close()
-    if unresolved != 0:
-        raise BackupError(f"reconciliation_outcome_unknown:{unresolved}")
+    lifecycle_inventory = {
+        "outcome_unknown": unresolved,
+        "active_outbox": active_outbox,
+        "artifact_creating": artifact_creating,
+        "terminal_with_claim": terminal_with_claim,
+        "review_without_task": review_without_task,
+    }
+    blockers = {name: count for name, count in lifecycle_inventory.items() if count != 0}
+    if blockers:
+        raise BackupError("reconciliation_lifecycle_blockers:" + json.dumps(blockers, sort_keys=True))
 
     sheets = target / ".tmp" / "google-sheets-leads-state.json"
     json.loads(sheets.read_text(encoding="utf-8"))
@@ -446,6 +549,7 @@ def acknowledge_restore(*, target: Path, actor: str, evidence: dict[str, Any]) -
         "acknowledged_by": reviewer,
         "evidence": evidence,
         "outcome_unknown_count": unresolved,
+        "lifecycle_inventory": lifecycle_inventory,
     }
     temporary = flag.with_name(f".{flag.name}.reconciled.partial")
     write_json(temporary, record)
@@ -516,11 +620,15 @@ def main() -> int:
             if args.retention_days:
                 if not args.offsite_remote:
                     raise BackupError("backup_retention_requires_offsite_remote")
-                retention = apply_offsite_retention(
-                    remote_directory=args.offsite_remote,
-                    retention_days=args.retention_days,
-                    deletion_approved=args.retention_delete_approved,
+                retention = evaluate_offsite_retention(
+                    remote_directory=args.offsite_remote, retention_days=args.retention_days,
                 )
+                if retention["offsite_expired_objects"] and args.retention_delete_approved:
+                    retention.update(apply_offsite_retention(
+                        remote_directory=args.offsite_remote,
+                        retention_days=args.retention_days,
+                        deletion_approved=True,
+                    ))
                 result.update(retention)
                 metadata_path = args.output.with_name(args.output.name + ".metadata.json")
                 write_json(metadata_path, result)

@@ -268,7 +268,7 @@ def build_cases() -> list[dict[str, Any]]:
         cases.append(case(f"L{i:02d}_unknown", "unknown_review_needed", f"unknown{i}@unknown.example", subj, body))
 
     # Additional routing/idempotency-ish context edges.
-    cases.append(case("O01_reply_domain_mismatch", "unknown_review_needed", "identity-005@example.invalid", "Re: Orchesta RFQ", "Odpisuję z prywatnego maila w sprawie oferty.", headers={"In-Reply-To": "<identity-006@example.invalid>"}, context={"expected_thread_domain": "firm.pl"}))
+    cases.append(case("O01_reply_domain_mismatch", "unknown_review_needed", "identity-003@gmail.com", "Re: Orchesta RFQ", "Odpisuję z prywatnego maila w sprawie oferty.", headers={"In-Reply-To": "<identity-003@customer-003.example.com>"}, context={"expected_thread_domain": "firm.pl"}))
     cases.append(case("O02_subject_re_without_headers", "new_quote_request", "fresh@newfirm.example", "Re: Wycena Orchesta RFQ", "Proszę o ofertę na system do zapytań ofertowych.", headers={}))
     cases.append(case("O03_safe_pdf_rfq_extract_allowed", "new_quote_request", "pdf@firm.example", "Zapytanie ofertowe PDF", "Proszę o wycenę Orchesta RFQ, opis procesu w PDF.", attachments=[{"filename": "opis.pdf", "mime": "application/pdf", "pages": 3, "text_chars_first_pages": 1000}]))
     cases.append(case("O04_invoice_in_rfq_context", "new_quote_request", "invcontext@firm.example", "RFQ z przykładową fakturą", "Proszę o wycenę Orchesta RFQ; faktura jest tylko przykładem załącznika w zapytaniu ofertowym.", attachments=[{"filename": "faktura.pdf", "mime": "application/pdf", "pages": 1, "text_chars_first_pages": 0}]))

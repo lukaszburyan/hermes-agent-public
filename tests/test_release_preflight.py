@@ -28,11 +28,13 @@ def fixture(tmp_path: Path) -> tuple[Path, Path]:
     write(runtime / "config.yaml", "model: controlled\n")
     for name in ("auth.json", "google_client_secret.json", "google_token.json"):
         write(runtime / name, "{}\n")
-    write(runtime / "rclone.conf", "[controlled]\ntype = local\n")
+    rclone_directory = runtime / "rclone"
+    rclone_directory.mkdir(mode=0o700)
+    write(rclone_directory / "rclone.conf", "[controlled]\ntype = local\n")
     runtime_values = {
         key: "controlled-value" for key in preflight.REQUIRED_RUNTIME_KEYS
     }
-    runtime_values["HERMES_BACKUP_RETENTION_DELETE_APPROVED"] = "1"
+    runtime_values["HERMES_BACKUP_RETENTION_DELETE_APPROVED"] = "0"
     runtime_values["ORCHESTA_RFQ_ALLOW_EXTERNAL_VISION"] = "0"
     runtime_values["ORCHESTA_RFQ_ALLOW_SCHEMA_MODEL"] = "0"
     runtime_environment = runtime / ".env"
@@ -47,8 +49,11 @@ def fixture(tmp_path: Path) -> tuple[Path, Path]:
         "HERMES_CONTAINER_NAME": "hermes-agent-hermes-agent-1",
         "HERMES_RUNTIME_DIR": str(runtime),
         "HERMES_RUNTIME_ENV_FILE": str(runtime_environment),
-        "HERMES_RCLONE_CONFIG_FILE": str(runtime / "rclone.conf"),
+        "HERMES_RCLONE_CONFIG_DIR": str(rclone_directory),
+        "HERMES_RCLONE_CONFIG_FILE": str(rclone_directory / "rclone.conf"),
         "HERMES_RELEASE_IMAGE": "ghcr.io/example/hermes-agent-public",
+        "HERMES_RELEASE_COMMIT": "f" * 40,
+        "HERMES_RELEASE_TAG": "v0.18.0-test",
         "HERMES_RELEASE_DIGEST": "sha256:" + "1" * 64,
         "HERMES_TRANSPORT_KILL_SWITCH": "1",
         "HERMES_OPERATIONAL_AUTOSEND_ENABLED": "0",
@@ -62,6 +67,19 @@ def test_release_preflight_accepts_complete_fail_closed_runtime(tmp_path: Path):
     report = preflight.collect(release_environment)
     assert report["status"] == "ok", report
     assert report["errors"] == []
+
+
+def test_release_preflight_requires_explicit_valid_retention_choice(tmp_path: Path):
+    release_environment, runtime_environment = fixture(tmp_path)
+    runtime_text = runtime_environment.read_text(encoding="utf-8").replace(
+        "HERMES_BACKUP_RETENTION_DELETE_APPROVED=0",
+        "HERMES_BACKUP_RETENTION_DELETE_APPROVED=invalid",
+    )
+    write(runtime_environment, runtime_text)
+
+    report = preflight.collect(release_environment)
+
+    assert "backup_retention_delete_approval_invalid" in report["errors"]
 
 
 def test_release_preflight_rejects_token_api_placeholder_digest_and_open_permissions(tmp_path: Path):
@@ -82,3 +100,39 @@ def test_release_preflight_rejects_token_api_placeholder_digest_and_open_permiss
     assert "token_billed_openai_api_key_forbidden" in report["errors"]
     assert any(str(error).startswith("sensitive_file_permissions_too_open:") for error in report["errors"])
     json.dumps(report)
+
+
+def test_release_preflight_rejects_missing_or_placeholder_commit_and_tag(tmp_path: Path):
+    release_environment, _ = fixture(tmp_path)
+    release_text = release_environment.read_text(encoding="utf-8")
+    release_text = release_text.replace("HERMES_RELEASE_COMMIT=" + "f" * 40, "HERMES_RELEASE_COMMIT=" + "0" * 40)
+    release_text = release_text.replace("HERMES_RELEASE_TAG=v0.18.0-test", "HERMES_RELEASE_TAG=v0.0.0-placeholder")
+    write(release_environment, release_text)
+
+    report = preflight.collect(release_environment)
+
+    assert "release_commit_invalid_or_placeholder" in report["errors"]
+    assert "release_tag_invalid_or_placeholder" in report["errors"]
+
+
+def test_release_preflight_requires_private_dedicated_rclone_directory(tmp_path: Path):
+    release_environment, _ = fixture(tmp_path)
+    release_values = preflight.read_environment(release_environment)
+    rclone_directory = Path(release_values["HERMES_RCLONE_CONFIG_DIR"])
+    rclone_directory.chmod(0o755)
+
+    report = preflight.collect(release_environment)
+
+    assert f"sensitive_directory_permissions_too_open:{rclone_directory}" in report["errors"]
+
+    rclone_directory.chmod(0o700)
+    outside = rclone_directory.parent / "outside-rclone.conf"
+    write(outside, "[controlled]\ntype = local\n")
+    release_text = release_environment.read_text(encoding="utf-8").replace(
+        str(rclone_directory / "rclone.conf"), str(outside)
+    )
+    write(release_environment, release_text)
+
+    report = preflight.collect(release_environment)
+
+    assert "rclone_config_file_not_in_dedicated_directory" in report["errors"]

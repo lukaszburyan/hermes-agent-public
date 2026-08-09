@@ -6,14 +6,18 @@ Run this skill only after the existing mail lead pipeline has identified a quote
 
 ## Required Inputs
 
-The final PDF may be generated only when Hermes knows the pricing and offer-identity blockers:
+The final PDF may be generated when Hermes knows the offer identity and can resolve the pricing variant:
 
 - company name,
 - client email,
-- number of mailboxes to monitor,
-- whether CRM is wanted,
 
-If the number of mailboxes or CRM decision is missing, block PDF generation and create a short questions draft instead.
+The number of mailboxes and CRM decision use explicit business policies rather than a blanket block:
+
+- known mailbox count: calculate that exact variant;
+- unknown mailbox count: calculate a clearly labelled one-mailbox start variant;
+- known CRM decision: include or exclude it exactly;
+- unknown CRM decision: show the base offer without CRM and a separate CRM option;
+- conflicting mailbox or CRM facts: stop and require human review.
 
 Capture these when they are available, but do not block the PDF only because they are unknown:
 
@@ -21,6 +25,8 @@ Capture these when they are available, but do not block the PDF only because the
 - client last name,
 - quote-request source: `mail`, `form`, or `both`,
 - whether the client has sample quote requests.
+
+Monthly volume and the current process are supporting information for the description and ROI. A customer may explicitly not know them; that state must be saved as `unknown_confirmed` and must not block the offer.
 
 ## Safety Gates
 
@@ -42,7 +48,7 @@ On safety failure, stop customer automation and send internal notifications. Do 
 ## Complete-Data Path
 
 1. Read the whole customer conversation and safe attachment summaries.
-2. Validate required data and safety gates.
+2. Resolve fact states, apply only approved assumptions/variants, and validate identity, conflicts, and safety gates.
 3. Read approved pricing and approved product/scope/guarantee files.
 4. Calculate the net price.
 5. Build offer JSON.
@@ -55,16 +61,16 @@ On safety failure, stop customer automation and send internal notifications. Do 
 12. Delete the working PDF after the draft confirms the attachment.
 13. Send Telegram to Lukasz.
 
-## Missing-Data Path
+## True-Blocker Path
 
 Create a short draft with up to 2 questions. Do not mention pricing. Do not create a PDF.
 
 Preferred questions:
 
-1. Ile kont pocztowych ma śledzić system?
-2. Czy uwzględnić integrację z CRM w ofercie?
+1. Na jaką firmę mam przygotować ofertę?
+2. Na jaki adres mailowy mam przypisać kontakt w ofercie?
 
-Never ask the customer about RFQ types, detailed Telegram notification types, later RFQ handling stages, who currently answers first, or monthly quote-request volume unless the customer already volunteered that number.
+Mailbox count or CRM may be asked when one concise clarification would materially improve the variant, but lack of an answer does not block the approved start offer. Never ask the customer about RFQ types, detailed Telegram notification types, later RFQ handling stages, who currently answers first, or monthly quote-request volume unless the customer already volunteered that number.
 
 ## Draft Update After Scope Change
 
